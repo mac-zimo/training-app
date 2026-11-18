@@ -351,6 +351,21 @@ details.review summary { cursor: pointer; font-weight: 500; }
   .themes { grid-template-columns: repeat(2, 1fr); }
   .question { font-size: 1.05rem; }
 }
+
+/* ------------------------------------------------------------ parcours "Essentiel du poste" */
+.card.ess { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent), var(--shadow); }
+.card.ess .kpis { grid-template-columns: repeat(4, 1fr); margin: .5rem 0 .7rem; }
+.card.ess .seg { margin-bottom: .2rem; }
+.card.ess > .btn.primary { width: 100%; margin-top: .4rem; }
+.tag.ess-tag { background: var(--accent); color: #fff; font-weight: 600; }
+.tag.prio { background: var(--code); color: var(--mid); letter-spacing: -1px; }
+.ess-row td:first-child .link { font-weight: 600; }
+.expl { line-height: 1.5; }
+.expl p { margin: .5rem 0; }
+.expl ul, .expl ol { margin: .3rem 0 .5rem; padding-left: 1.2rem; }
+.expl li { margin: .15rem 0; }
+.expl code { background: var(--code); padding: 0 .25rem; border-radius: 4px; font-size: .9em; }
+.expl a { color: var(--accent); }
 </style>
   <script>
 /*
@@ -651,7 +666,7 @@ details.review summary { cursor: pointer; font-weight: 500; }
       stats: {},       // id -> { n: essais, ok: réussites, last: bool, ts }
       history: [],     // { ts, total, ok, themes }
       session: null,
-      prefs: { mode: "smart", themes: [], levels: [1, 2, 3], open: true, shuffle: true, count: 20 }
+      prefs: { mode: "smart", themes: [], levels: [1, 2, 3], open: true, shuffle: true, count: 20, essScope: "top" }
     };
   }
 
@@ -724,8 +739,12 @@ details.review summary { cursor: pointer; font-weight: 500; }
   }
 
   // ---------------------------------------------------------------- statistiques
-  function themeStats(themeId) {
-    var qs = all.filter(function (q) { return q.theme === themeId; });
+  // Banque principale = questions par thème. Les questions d'un parcours (q.track, ex. "essentiel",
+  // générées depuis la fiche 00) ont leurs propres sessions et statistiques.
+  function isMain(q) { return !q.track; }
+  function essAll() { return all.filter(function (q) { return q.track === "essentiel"; }); }
+
+  function statsOf(qs) {
     var r = { total: qs.length, seen: 0, mastered: 0, wrong: 0, n: 0, ok: 0 };
     qs.forEach(function (q) {
       var s = db.stats[q.id];
@@ -737,38 +756,39 @@ details.review summary { cursor: pointer; font-weight: 500; }
     r.rate = r.n ? r.ok / r.n : null;
     return r;
   }
-
-  function globalStats() {
-    var r = { total: all.length, seen: 0, mastered: 0, wrong: 0, n: 0, ok: 0 };
-    all.forEach(function (q) {
-      var s = db.stats[q.id];
-      if (!s) return;
-      r.seen++; r.n += s.n; r.ok += s.ok;
-      if (s.last === true) r.mastered++;
-      if (s.last === false) r.wrong++;
-    });
-    r.rate = r.n ? r.ok / r.n : null;
-    return r;
-  }
+  function themeStats(themeId) { return statsOf(all.filter(function (q) { return isMain(q) && q.theme === themeId; })); }
+  function globalStats() { return statsOf(all.filter(isMain)); }
 
   // ---------------------------------------------------------------- sélection des questions
   function pool(prefs) {
     var th = new Set(prefs.themes.length ? prefs.themes : themes.map(function (t) { return t.id; }));
     var lv = new Set(prefs.levels.length ? prefs.levels : [1, 2, 3]);
     return all.filter(function (q) {
-      return th.has(q.theme) && lv.has(q.level) && (prefs.open || q.type !== "open");
+      return isMain(q) && th.has(q.theme) && lv.has(q.level) && (prefs.open || q.type !== "open");
     });
   }
 
-  function candidates(prefs) {
-    var p = pool(prefs);
-    if (prefs.mode === "errors") p = p.filter(function (q) { var s = db.stats[q.id]; return s && s.last === false; });
-    if (prefs.mode === "new") p = p.filter(function (q) { return !db.stats[q.id]; });
+  function applyMode(p, mode) {
+    if (mode === "errors") p = p.filter(function (q) { var s = db.stats[q.id]; return s && s.last === false; });
+    if (mode === "new") p = p.filter(function (q) { return !db.stats[q.id]; });
     return p;
   }
+  function candidates(prefs) { return applyMode(pool(prefs), prefs.mode); }
 
-  function pick(prefs) {
-    var p = shuffle(candidates(prefs));
+  // Parcours "Essentiel du poste" : périmètre (top / ★★★ / toutes) + thèmes sélectionnés + mode.
+  var ESS_FICHE = "00-essentiel-poste.md";
+  var ESS_SCOPES = [["top", "Top 20"], ["p3", "★★★"], ["all", "Toutes"]];
+  function essPool(prefs, scope) {
+    var th = prefs.themes.length ? new Set(prefs.themes) : null;
+    var sc = scope || prefs.essScope || "top";
+    return essAll().filter(function (q) {
+      return (!th || th.has(q.theme)) && (sc === "all" || (sc === "top" ? q.top : q.prio >= 3));
+    });
+  }
+  function essCandidates(prefs) { return applyMode(essPool(prefs), prefs.mode); }
+
+  function pick(prefs, list) {
+    var p = shuffle((list || candidates(prefs)).slice());
     if (prefs.mode === "smart") {
       // erreurs d'abord, puis jamais vues, puis les plus anciennes
       var rank = function (q) {
@@ -838,6 +858,13 @@ details.review summary { cursor: pointer; font-weight: 500; }
       var n = P.count > 0 ? Math.min(P.count, c) : c;
       startBtn.textContent = c ? "Commencer (" + n + " question" + (n > 1 ? "s" : "") + ")" : "Aucune question pour ces filtres";
       startBtn.disabled = !c;
+      if (!ess.length) return;
+      var e = essCandidates(P).length;
+      var en = P.count > 0 ? Math.min(P.count, e) : e;
+      essBtn.textContent = e ? "Réviser l'essentiel (" + en + " question" + (en > 1 ? "s" : "") + ")" : "Aucune question pour ces filtres";
+      essBtn.disabled = !e;
+      essHint.textContent = "Le mode, le nombre de questions" + (P.themes.length ? " et les thèmes sélectionnés (" + P.themes.length + ")" : " et les thèmes") + " choisis ci-dessous s'appliquent aussi.";
+      drawEssScopes();
     }
 
     append(m, h("section", { class: "card summary" },
@@ -858,6 +885,33 @@ details.review summary { cursor: pointer; font-weight: 500; }
           h("button", { class: "btn primary", onclick: renderQuestion }, "Reprendre"),
           h("button", { class: "btn", onclick: function () { db.session = null; save(); renderHome(); } }, "Abandonner"))
       ));
+    }
+
+    // Essentiel du poste
+    var ess = essAll();
+    var essBtn = h("button", { class: "btn primary", onclick: function () { startSession(pick(P, essCandidates(P))); } });
+    var essScopeBox = h("div", { class: "seg" });
+    var essHint = h("p", { class: "hint" });
+    function drawEssScopes() {
+      essScopeBox.innerHTML = "";
+      ESS_SCOPES.forEach(function (sc) {
+        append(essScopeBox, h("button", {
+          class: "chip" + ((P.essScope || "top") === sc[0] ? " on" : ""),
+          onclick: function () { P.essScope = sc[0]; save(); refreshStart(); }
+        }, sc[1] + " · " + essPool(P, sc[0]).length));
+      });
+    }
+    if (ess.length) {
+      var es = statsOf(ess);
+      append(m, h("section", { class: "card ess" },
+        h("div", { class: "row between" },
+          h("h2", null, "Essentiel du poste"),
+          fiches[ESS_FICHE]
+            ? h("button", { class: "link small", onclick: function () { openFiche(ESS_FICHE, ""); } }, "📖 La fiche")
+            : null),
+        h("p", { class: "hint" }, "Les questions quasi certaines pour ce poste. Réponds à voix haute en 1 min, puis compare et auto-évalue-toi."),
+        h("div", { class: "kpis" }, kpi(es.total, "questions"), kpi(es.seen, "vues"), kpi(es.mastered, "maîtrisées"), kpi(es.wrong, "à revoir")),
+        essScopeBox, essHint, essBtn));
     }
 
     // Mode
@@ -999,10 +1053,11 @@ details.review summary { cursor: pointer; font-weight: 500; }
         h("span", null, answeredCount ? okCount + " / " + answeredCount + " ✓" : "")),
       h("div", { class: "progress" }, h("span", { style: "width:" + Math.round(100 * S.i / S.ids.length) + "%" })),
       h("div", { class: "qmeta" },
-        h("span", { class: "tag" }, t.label),
-        h("span", { class: "tag lvl" + q.level }, "Niveau " + q.level),
+        q.track ? h("span", { class: "tag ess-tag" }, "Essentiel") : null,
+        h("span", { class: "tag" }, q.section || t.label),
+        q.track ? h("span", { class: "tag prio" }, stars(q.prio)) : h("span", { class: "tag lvl" + q.level }, "Niveau " + q.level),
         q.type === "multi" ? h("span", { class: "tag hint-tag" }, "Plusieurs réponses") : null,
-        q.type === "open" ? h("span", { class: "tag hint-tag" }, "Question ouverte") : null),
+        q.type === "open" && !q.track ? h("span", { class: "tag hint-tag" }, "Question ouverte") : null),
       h("h2", { class: "question", html: md(q.question) })
     );
 
@@ -1010,7 +1065,9 @@ details.review summary { cursor: pointer; font-weight: 500; }
 
     if (q.type === "open") {
       if (!res) {
-        var ta = h("textarea", { rows: 5, placeholder: "Formule ta réponse (à voix haute ou par écrit), puis compare. Rien n'est enregistré." });
+        var ta = h("textarea", { rows: 5, placeholder: q.track
+          ? "Réponds à voix haute en 1 min (ou note tes mots-clés), puis compare. Rien n'est enregistré."
+          : "Formule ta réponse (à voix haute ou par écrit), puis compare. Rien n'est enregistré." });
         append(m, ta);
         append(actions, h("button", {
           class: "btn primary", onclick: function () { S.results[q.id] = { ok: null, text: ta.value }; save(); renderQuestion(); }
@@ -1096,9 +1153,15 @@ details.review summary { cursor: pointer; font-weight: 500; }
     } else {
       append(box, h("strong", null, "Éléments de réponse"));
     }
-    append(box, h("p", { html: md(q.explanation || "") }));
+    append(box, explanation(q));
     if (q.ref) append(box, ficheLink(q.ref));
     return box;
+  }
+
+  // Explication : markdown inline, ou bloc (paragraphes, listes, liens vers les fiches) si q.block.
+  function explanation(q) {
+    if (q.block && MD) return h("div", { class: "expl", html: MD.render(q.explanation || "", { link: ficheLinkHtml }).html });
+    return h("p", { html: md(q.explanation || "") });
   }
 
   function ficheLink(ref) {
@@ -1159,7 +1222,7 @@ details.review summary { cursor: pointer; font-weight: 500; }
           return h("details", { class: "review" },
             h("summary", { html: md(q.question) }),
             q.type !== "open" ? h("p", { class: "expected", html: "Réponse : " + q.answer.map(function (i) { return md(q.choices[i]); }).join(" · ") }) : null,
-            h("p", { html: md(q.explanation || "") }),
+            explanation(q),
             q.ref ? ficheLink(q.ref) : null);
         })));
     }
@@ -1172,6 +1235,21 @@ details.review summary { cursor: pointer; font-weight: 500; }
   // ---------------------------------------------------------------- écran : statistiques
   function renderStats() {
     var m = screen("stats");
+    var ess = essAll();
+    var essRow = null;
+    if (ess.length) {
+      var es = statsOf(ess);
+      essRow = h("tr", { class: "ess-row" },
+        h("td", null, h("button", {
+          class: "link", title: "Session Essentiel du poste",
+          onclick: function () { startSession(pick(db.prefs, essPool({ themes: [], essScope: "all" }))); }
+        }, "Essentiel du poste")),
+        h("td", { class: "num" }, es.total),
+        h("td", { class: "num" }, es.seen),
+        h("td", { class: "num" }, es.mastered),
+        h("td", { class: "num" + (es.wrong ? " bad" : "") }, es.wrong),
+        h("td", { class: "num" }, pct(es.rate)));
+    }
     var rows = themes.map(function (t) {
       var s = themeStats(t.id);
       return h("tr", null,
@@ -1191,7 +1269,7 @@ details.review summary { cursor: pointer; font-weight: 500; }
         h("p", { class: "hint" }, "Toucher un thème lance une session sur ce thème."),
         h("div", { class: "table-wrap" }, h("table", { class: "stats" },
           h("thead", null, h("tr", null, ["Thème", "Q", "Vues", "OK", "✗", "Réussite"].map(function (x) { return h("th", null, x); }))),
-          h("tbody", null, rows)))),
+          h("tbody", null, essRow, rows)))),
       db.history.length ? h("section", { class: "card" },
         h("h2", null, "Dernières sessions"),
         h("table", { class: "stats" }, h("tbody", null, db.history.slice(0, 15).map(function (x) {
@@ -1274,7 +1352,9 @@ details.review summary { cursor: pointer; font-weight: 500; }
     append(m, h("section", { class: "card" },
       h("h2", null, "Fiches de révision"),
       hasFiches ? null : h("p", { class: "warn" }, "Fiches non embarquées : lancer `node tools/build.mjs` pour générer data/fiches.js."),
-      h("ul", { class: "fiche-list" }, themes.map(function (t) {
+      h("ul", { class: "fiche-list" }, fiches[ESS_FICHE] ? h("li", null,
+        h("button", { class: "link", onclick: function () { openFiche(ESS_FICHE, ""); } }, fiches[ESS_FICHE].title),
+        " ", h("span", { class: "prio" }, "à faire en premier")) : null, themes.map(function (t) {
         var f = fiches[t.fiche];
         return h("li", null, f
           ? h("button", { class: "link", onclick: function () { openFiche(t.fiche, ""); } }, f.title)
@@ -1283,23 +1363,23 @@ details.review summary { cursor: pointer; font-weight: 500; }
       }))));
   }
 
+  // Liens markdown : http(s) en externe, "NN-xxx.md#ancre" vers la fiche embarquée, le reste en texte.
+  function ficheLinkHtml(href, text) {
+    if (/^https?:\/\//i.test(href)) return '<a href="' + MD.esc(href) + '" target="_blank" rel="noopener">' + text + "</a>";
+    var mm = href.match(/^(?:\.\/)?(\d\d-[\w-]+\.md)(?:#(.*))?$/);
+    if (mm && fiches[mm[1]]) {
+      return '<a href="#" data-fiche="' + MD.esc(mm[1]) + '" data-anchor="' + MD.esc(mm[2] || "") + '">' + text + "</a>";
+    }
+    return "<span>" + text + "</span>";
+  }
+
   var ficheOpen = false;
   function openFiche(file, anchor) {
     var f = fiches[file];
     var view = document.getElementById("fiche");
     var body = document.getElementById("fiche-body");
     document.getElementById("fiche-title").textContent = f.title;
-    var r = MD.render(f.md, {
-      idPrefix: "f-",
-      link: function (href, text) {
-        if (/^https?:\/\//i.test(href)) return '<a href="' + MD.esc(href) + '" target="_blank" rel="noopener">' + text + "</a>";
-        var mm = href.match(/^(?:\.\/)?(\d\d-[\w-]+\.md)(?:#(.*))?$/);
-        if (mm && fiches[mm[1]]) {
-          return '<a href="#" data-fiche="' + MD.esc(mm[1]) + '" data-anchor="' + MD.esc(mm[2] || "") + '">' + text + "</a>";
-        }
-        return "<span>" + text + "</span>";
-      }
-    });
+    var r = MD.render(f.md, { idPrefix: "f-", link: ficheLinkHtml });
     body.innerHTML = r.html;
     view.hidden = false;
     document.body.classList.add("fiche-open");
@@ -1330,6 +1410,12 @@ details.review summary { cursor: pointer; font-weight: 500; }
     document.getElementById("nav-stats").addEventListener("click", function () { closeFiche(); renderStats(); });
     document.getElementById("nav-fiches").addEventListener("click", function () { closeFiche(); renderFicheList(); });
     document.getElementById("fiche-close").addEventListener("click", function () { closeFiche(); });
+    main().addEventListener("click", function (e) {
+      var a = e.target.closest("a[data-fiche]");
+      if (!a) return;
+      e.preventDefault();
+      openFiche(a.getAttribute("data-fiche"), a.getAttribute("data-anchor"));
+    });
     document.getElementById("fiche-body").addEventListener("click", function (e) {
       var a = e.target.closest("a[data-fiche]");
       if (!a) return;
@@ -1366,6 +1452,7 @@ details.review summary { cursor: pointer; font-weight: 500; }
       .filter(function (t) { return !all.some(function (q) { return q.theme === t.id; }); })
       .map(function (t) { return "data/" + t.id + ".js"; });
     if (!Object.keys(fiches).length) srcs.push("data/fiches.js");
+    if (!all.some(function (q) { return q.track; })) srcs.push("data/essentiel.js");
     var pending = srcs.length;
     if (!pending) { start(); return; }
     srcs.forEach(function (src) {
@@ -1489,8 +1576,1222 @@ QUIZ.registerFiches({
  "19-ia.md": {
   "title": "19 — IA pour le développement : agents de code, LLM, MCP, gouvernance (ia)",
   "md": "# 19 — IA pour le développement : agents de code, LLM, MCP, gouvernance (`ia`)\n\n## En 30 secondes\nUn **LLM** prédit des tokens : il est puissant mais **non déterministe**, limité par sa **fenêtre de contexte**\net capable d'**halluciner**. Un **agent de code** = un LLM + des **outils** (lire/écrire des fichiers, lancer des\ncommandes, appeler des API) + une **boucle** (raisonner → agir → observer → recommencer) jusqu'à l'objectif.\nLa qualité du résultat dépend surtout du **contexte** fourni (instructions projet type `AGENTS.md`, skills,\noutils **MCP**) et des **boucles de vérification** (tests, build, lint, revue humaine).\nEn banque, l'enjeu n'est pas \"utiliser l'IA ou pas\" mais l'utiliser **avec des garde-fous** : confidentialité\ndes données, sécurité (prompt injection, supply chain), traçabilité, conformité (RGPD, DORA, AI Act).\nPosition senior : **l'IA amplifie** — une équipe avec de bons tests, de petits incréments et une CI solide\naccélère ; une équipe sans filet produit plus vite de la dette.\n\n## Notions clés\n\n### Ce qu'il faut savoir d'un LLM pour bien s'en servir\n- **Token** : unité de texte (~¾ de mot en anglais, moins en français et en code). Coût et latence sont\n  facturés/mesurés en tokens d'entrée et de sortie (la sortie coûte plus cher).\n- **Fenêtre de contexte** : tout ce que le modèle \"voit\" à un instant (prompt système, instructions, historique,\n  fichiers lus, résultats d'outils). Au-delà, il faut **résumer/compacter** ou perdre de l'information.\n  **Context rot** : la qualité baisse quand le contexte grossit et se remplit de bruit, bien avant la limite.\n- **Non-déterminisme** : même prompt → réponses différentes (échantillonnage, `temperature`). Conséquence :\n  on ne \"fait pas confiance\", on **vérifie** (tests, compilation, revue).\n- **Hallucination** : réponse plausible mais fausse (API inexistante, package inventé, référence réglementaire\n  fausse). Plus fréquent sur ce qui est rare dans les données d'entraînement ou postérieur au **cutoff**.\n- **Modèles de raisonnement** (thinking) : le modèle \"réfléchit\" avant de répondre ; meilleur sur les tâches\n  complexes, plus lent et plus cher. Choisir le modèle selon la tâche (petit/rapide pour du mécanique,\n  grand pour l'architecture ou le debug difficile).\n- **Prompt caching** : réutiliser un préfixe de contexte identique → moins cher et plus rapide (d'où l'intérêt\n  de contextes stables : instructions en tête, variable en fin).\n- **Embeddings** : vecteurs représentant le sens d'un texte → recherche sémantique, base du **RAG**.\n\n### Du chat à l'agent : les niveaux d'usage\n| Niveau | Exemple | Qui contrôle |\n|--------|---------|--------------|\n| Autocomplétion | Copilot inline | le dev, ligne à ligne |\n| Chat | poser une question, coller du code | le dev copie/colle |\n| Agent dans l'IDE | Copilot agent mode, Cursor | l'agent modifie plusieurs fichiers, le dev valide |\n| Agent CLI | Claude Code, Codex CLI, Copilot CLI | l'agent lit, exécute, teste en boucle ; permissions |\n| Agent asynchrone | Copilot coding agent (issue → PR), agent dans la CI | l'agent travaille seul, l'humain revoit la PR |\n| Multi-agents | orchestrateur + sous-agents spécialisés | découpage, contexte isolé par sous-agent |\n\n**Boucle agentique** (pattern ReAct) : le modèle choisit un outil (*tool call*), l'hôte l'exécute, le résultat\nrevient dans le contexte, le modèle décide de la suite. Le modèle n'exécute rien lui-même : c'est l'**hôte**\n(IDE, CLI) qui exécute, donc c'est l'hôte qui porte les **permissions** et le **sandboxing**.\n\n### Context engineering (plus important que le \"prompt engineering\")\n- **Fichiers d'instructions projet** chargés automatiquement :\n  - `AGENTS.md` : format ouvert, lu par la plupart des agents (Codex, Copilot, Cursor, Gemini CLI…) ;\n    confié à l'**Agentic AI Foundation** (Linux Foundation) fin 2025 avec MCP **(à vérifier)** ;\n  - `CLAUDE.md` (Claude Code, peut importer `@AGENTS.md`), `.github/copilot-instructions.md` et\n    `.github/instructions/*.instructions.md` (Copilot, ciblables par glob).\n  - Contenu utile : commandes build/test, conventions, architecture, interdits (\"ne jamais modifier les\n    migrations appliquées\"), définition de \"terminé\". Court, factuel, maintenu comme du code (revu en PR).\n- **Skills** (Agent Skills, `SKILL.md`) : dossier d'instructions + scripts + ressources, chargé **à la demande**\n  quand la description correspond à la tâche → *progressive disclosure* (le contexte n'est pas pollué par\n  tout le savoir de l'équipe en permanence). Format ouvert repris par plusieurs outils **(à vérifier)**.\n- **Mémoire persistante** : fichiers de mémoire, ou outils dédiés qui capturent les observations de session\n  et réinjectent un résumé à la session suivante. Risque : mémoire obsolète ou contenant des données sensibles.\n- **Sous-agents** : déléguer une recherche ou une revue à un agent au contexte isolé → le contexte principal\n  reste propre ; seule la synthèse revient.\n- **Plan d'abord** : faire produire un plan (mode plan), le corriger, puis exécuter. Moins de dérive.\n- **Compaction** : résumé automatique de la conversation quand le contexte sature ; repartir d'une session\n  neuve avec un fichier de passation (`HANDOFF.md`, `ROADMAP.md`) est souvent plus fiable.\n- **Hooks** : scripts déclenchés par l'hôte sur des événements (avant/après un outil, fin de tâche) →\n  formatter, lancer les tests, bloquer une commande dangereuse. Contrôle **déterministe**, contrairement au prompt.\n\n### MCP (Model Context Protocol)\n- Protocole ouvert (lancé par Anthropic fin 2024) pour brancher des **outils et données** sur n'importe quel\n  hôte IA : \"l'USB-C des agents\". Évite N×M intégrations.\n- Architecture : **host** (Claude Code, VS Code/Copilot…) → **client** MCP (un par serveur) → **server** MCP.\n- Primitives serveur : **tools** (actions appelables par le modèle), **resources** (données lisibles),\n  **prompts** (modèles réutilisables). Côté client : *sampling*, *elicitation* (demander une info à l'utilisateur).\n- Transports : **stdio** (processus local) et **Streamable HTTP** (serveur distant ; l'ancien HTTP+SSE est\n  déprécié). Auth des serveurs distants basée sur **OAuth 2.1** (le serveur MCP est un *resource server*).\n- Exemples utiles pour l'équipe : GitHub MCP, **Azure DevOps MCP** (work items, PR, pipelines), **Azure MCP**,\n  Microsoft Learn docs MCP, Datadog MCP **(à vérifier)**, serveurs internes (catalogue d'API, runbooks).\n- Serveur MCP en C# (SDK officiel `ModelContextProtocol`) :\n  ```csharp\n  var builder = Host.CreateApplicationBuilder(args);\n  builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace); // stdout réservé au protocole\n  builder.Services.AddMcpServer()\n      .WithStdioServerTransport()\n      .WithToolsFromAssembly();\n  await builder.Build().RunAsync();\n\n  [McpServerToolType]\n  public static class OnboardingTools\n  {\n      [McpServerTool, Description(\"Statut d'un dossier d'onboarding (environnement de recette, données fictives).\")]\n      public static string GetOnboardingStatus(string onboardingId) => /* appel API interne */ \"PendingReview\";\n  }\n  ```\n- Risques : un serveur MCP tiers = du **code qui s'exécute chez vous** et du **texte qui entre dans le\n  contexte** (injection) → registre de serveurs approuvés, versions épinglées, moindre privilège, pas de\n  token \"admin\" donné à un agent.\n\n### Intégrer un LLM dans une application .NET\n- **`Microsoft.Extensions.AI`** : abstractions `IChatClient`, `IEmbeddingGenerator<,>`, middleware (logging,\n  cache, OpenTelemetry, *function invocation*) — comme `ILogger` pour les LLM, fournisseur interchangeable.\n  ```csharp\n  IChatClient client = new AzureOpenAIClient(endpoint, new DefaultAzureCredential())\n      .GetChatClient(\"gpt-deployment\").AsIChatClient()\n      .AsBuilder().UseFunctionInvocation().UseOpenTelemetry().Build();\n\n  var options = new ChatOptions { Tools = [AIFunctionFactory.Create(GetOnboardingStatus)] };\n  var response = await client.GetResponseAsync(\"Où en est le dossier 42 ?\", options);\n  // En local : new OllamaApiClient(new Uri(\"http://localhost:11434\"), \"qwen3\") implémente aussi IChatClient (OllamaSharp)\n  ```\n- **Microsoft Agent Framework** : successeur unifié de Semantic Kernel et AutoGen pour les agents et\n  workflows multi-agents en .NET/Python **(à vérifier : statut GA)**.\n- **Azure** : Azure OpenAI dans **Microsoft Foundry** (ex-Azure AI Foundry, catalogue de modèles dont Claude\n  **(à vérifier)**), auth **Entra ID / Managed Identity** plutôt que clé, déploiement en région UE / Data Zone EU,\n  **Azure AI Content Safety**, **Azure AI Search** pour le RAG (index vectoriel + hybride + semantic ranker).\n- **RAG** (Retrieval-Augmented Generation) : découper les documents (*chunking*) → embeddings → index ; à la\n  requête, chercher les passages pertinents et les injecter dans le prompt → réponses sourcées sur des données\n  privées, sans réentraîner. **Fine-tuning** : changer le comportement/style, pas ajouter des connaissances\n  fraîches. Ordre de préférence : prompt/contexte → RAG → fine-tuning.\n\n### Workflow d'ingénierie avec un agent\n1. **Explorer** : faire lire le code et expliquer (cartographie, dépendances) avant de toucher.\n2. **Planifier** : plan écrit, découpé en petits pas, validé par l'humain.\n3. **Tests d'abord** : l'humain définit le comportement attendu (tests, critères d'acceptation) ; l'agent\n   implémente jusqu'au vert. Sur du legacy : faire générer des **tests de caractérisation / golden master**\n   puis refactorer sous filet (exactement la démarche Gilded Rose).\n4. **Petits diffs**, commits fréquents, l'agent lance build + tests + lint à chaque étape.\n5. **Revue humaine** : le dev reste **auteur et responsable** du code qu'il merge ; relire comme le code d'un\n   collègue junior très rapide et très sûr de lui.\n- *Vibe coding* (accepter sans lire) : acceptable pour un prototype jetable, **jamais** pour du code de\n  production bancaire. *Spec-driven development* : spec → plan → tâches → code, la spec devient la source de vérité.\n- Bons usages : boilerplate, tests, migration de langage/framework, lecture de legacy, scripts, docs, analyse de\n  logs, revue de PR en premier filtre, montée en compétence sur un langage inconnu.\n- Mauvais usages : logique métier critique non spécifiée, crypto/sécurité \"maison\", décisions d'architecture\n  déléguées sans discussion, données réelles de clients dans le prompt.\n\n### Mesurer l'impact (ne pas croire, mesurer)\n- **Étude METR (2025)** : des devs open source expérimentés étaient ~19 % **plus lents** avec l'IA sur leurs\n  propres repos, tout en s'estimant ~20 % plus rapides → la perception n'est pas une mesure.\n- **Rapport DORA 2025** (State of AI-assisted Software Development) : adoption quasi générale ; l'IA est un\n  **amplificateur** des forces et des faiblesses de l'organisation ; capacités clés : position claire sur l'IA,\n  données internes accessibles, contrôle de version solide, **petits lots**, plateforme interne de qualité\n  **(à vérifier : liste exacte)**.\n- Mesurer avec les **métriques DORA** (lead time, fréquence de déploiement, change failure rate, temps de\n  restauration), la taille/temps de revue des PR, le taux de bugs, la satisfaction (SPACE / DevEx) — **pas** le\n  nombre de lignes générées ni le taux d'acceptation des suggestions seul.\n- **Evals** pour les fonctionnalités LLM d'un produit : jeu de cas de référence (*golden dataset*), critères\n  automatiques + **LLM-as-judge** calibré par des humains, exécutées en CI comme des tests de régression.\n\n### Sécurité (OWASP Top 10 for LLM Applications 2025)\nLLM01 **Prompt Injection** · LLM02 Sensitive Information Disclosure · LLM03 Supply Chain · LLM04 Data and Model\nPoisoning · LLM05 Improper Output Handling · LLM06 **Excessive Agency** · LLM07 System Prompt Leakage ·\nLLM08 Vector and Embedding Weaknesses · LLM09 Misinformation · LLM10 Unbounded Consumption.\n- **Injection indirecte** : instructions cachées dans un fichier, une issue, une page web, un résultat d'outil\n  MCP, un README de dépendance → l'agent les exécute. Aucun filtre ne la bloque à 100 %.\n- **Lethal trifecta** (S. Willison) : accès à des **données privées** + exposition à du **contenu non fiable** +\n  capacité de **communiquer vers l'extérieur** = exfiltration possible. Casser au moins une des trois branches.\n- **Slopsquatting** : l'IA invente un nom de package, un attaquant le publie → vérifier chaque nouvelle\n  dépendance (lock file, source NuGet interne/proxy, SCA).\n- **Secrets** : ne jamais laisser un `.env` ou un `appsettings.Development.json` avec secrets lisible par\n  l'agent ; Key Vault + Managed Identity ; scan de secrets en CI.\n- **Moindre privilège / sandbox** : permissions par outil, liste blanche de commandes, conteneur ou devcontainer\n  sans accès réseau sortant, pas de credentials de prod sur le poste de dev, branche protégée + PR obligatoire.\n- **Rules file / config poisoning** : un `AGENTS.md` ou une config MCP modifié dans une PR peut détourner\n  l'agent → ces fichiers sont revus comme du code (CODEOWNERS).\n- **Sortie du LLM = entrée non fiable** : la valider, l'échapper, jamais l'exécuter (SQL, shell) sans contrôle.\n\n### Contraintes d'une banque / fintech régulée\n- **Données** : secret bancaire + **RGPD** → pas de données clients réelles (PII, IBAN, pièces d'identité KYC)\n  dans un outil non approuvé ; jeux de données fictifs ou anonymisés ; classification des données avant usage.\n- **Outils entreprise** : licences Business/Enterprise (pas d'entraînement sur le code, rétention limitée,\n  journaux d'audit, exclusion de contenu, filtre de code public, indemnisation PI), hébergement UE\n  (EU Data Boundary, Data Zone EU sur Azure). Vérifier la **politique IA du groupe** avant tout outil.\n- **DORA** : un fournisseur de LLM est un **prestataire TIC tiers** → contrat, registre d'information, stratégie\n  de sortie, gestion du risque de concentration ; un service critique ne doit pas dépendre d'un seul modèle\n  sans plan B.\n- **AI Act (UE)** : en vigueur depuis août 2024 ; pratiques interdites et **obligation de maîtrise de l'IA\n  (art. 4, *AI literacy*)** depuis février 2025 ; obligations des modèles à usage général depuis août 2025 ;\n  systèmes **à haut risque** (annexe III : notamment **évaluation de solvabilité / scoring de crédit**)\n  prévus août 2026, report envisagé par le *Digital Omnibus* **(à vérifier)**. La **vérification biométrique\n  1:1** (confirmer qu'une personne est bien celle qu'elle prétend être, cas du KYC) est exclue de\n  l'identification biométrique à haut risque ; la détection de fraude est exclue du scoring de crédit\n  **(à vérifier avec la conformité)**. Un assistant de code n'est pas un système à haut risque.\n- **Traçabilité** : savoir dire quel code/quelle décision a impliqué l'IA ; la responsabilité reste humaine\n  (principe des quatre yeux = revue de PR obligatoire).\n\n### IA locale (open-weight)\n- **Ollama** : exécute des modèles open-weight (Qwen, Llama, Mistral, Gemma, gpt-oss, DeepSeek…) en local ;\n  API sur `localhost:11434`, endpoint **compatible OpenAI** (`/v1`) et compatibilité API Anthropic permettant\n  de brancher Claude Code **(à vérifier : version)**. `Modelfile` pour fixer prompt système et paramètres.\n- **Quantization** (GGUF, Q4_K_M, Q8…) : réduire la précision des poids pour tenir en mémoire ; ordre de grandeur\n  ~0,6 Go de VRAM par milliard de paramètres en 4 bits + le **KV cache** qui grossit avec la taille du contexte.\n- **Piège classique** : la fenêtre de contexte par défaut (`num_ctx`) est petite → un agent perd ses\n  instructions et ses définitions d'outils ; l'augmenter explicitement (coût mémoire).\n- **Open WebUI** : interface web auto-hébergée (chat, RAG sur documents, multi-utilisateur) devant Ollama ou\n  une API compatible OpenAI. Alternatives : LM Studio, vLLM (serveur de production).\n- Intérêts : **confidentialité** (rien ne sort du poste/du réseau), souveraineté, coût marginal nul, hors ligne,\n  expérimentation. Limites : qualité inférieure aux modèles frontière sur les tâches agentiques longues,\n  **tool calling moins fiable**, matériel (GPU/VRAM), maintenance, pas de SLA. Usage réaliste : tâches ciblées,\n  classification, extraction, données sensibles, prototypage — pas l'agent principal d'une équipe.\n\n### Adopter l'IA dans une équipe (playbook)\n1. **Cadre** : outils approuvés, classes de données autorisées, règles d'or (revue humaine, pas de prod, pas de\n   PII) — en lien avec la sécurité et la conformité, pas contre elles.\n2. **Contexte partagé dans le repo** : `AGENTS.md` par service (commandes, conventions, architecture, interdits),\n   skills d'équipe (créer un consumer Service Bus idempotent, ajouter un endpoint selon les conventions…), serveurs\n   MCP approuvés. Versionnés et revus comme du code.\n3. **Filets automatiques** : tests, analyse statique, SAST/SCA, scan de secrets, mutation testing → ce qui rend\n   l'IA sûre, c'est la CI, pas la confiance.\n4. **Cas d'usage à fort ROI** d'abord : tests de caractérisation sur le legacy, migrations (.NET Framework →\n   .NET), revue de PR en premier filtre, analyse d'incident (logs/traces via MCP), documentation et ADR.\n5. **Mesurer** avant/après (DORA, temps de revue, défauts), partager les retours (démos, guilde, champions),\n   ajuster.\n6. **Compétences** : former (obligation de maîtrise de l'IA de l'AI Act), garder la capacité à coder et\n   raisonner sans IA (juniors en particulier : risque de *deskilling*).\n\n## Pièges et nuances\n- \"L'IA écrit 50 % de notre code\" ne dit rien sur la valeur livrée : mesurer le flux et la qualité.\n- Le goulot se déplace vers la **revue** : plus de code produit = plus de code à relire. Des PR petites et\n  des tests lisibles deviennent encore plus importants.\n- Un agent qui \"fait passer les tests\" peut modifier les tests ou ajouter des cas particuliers en dur :\n  surveiller les diffs sur les tests, protéger les tests de référence.\n- Plus de contexte n'est pas mieux : un `AGENTS.md` de 2 000 lignes dégrade les résultats.\n- Un prompt n'est pas un contrôle de sécurité : ce qui doit être garanti passe par des permissions, des hooks,\n  la CI ou l'architecture.\n- Les plugins, skills et serveurs MCP communautaires sont de la **supply chain** : les auditer comme une\n  dépendance NuGet. Un outil de mémoire persistante stocke du contenu de session : vérifier où et quoi.\n- Ne pas confondre \"le modèle sait\" et \"le modèle a accès\" : un fait récent ou interne doit être fourni (RAG,\n  MCP, doc), sinon il sera inventé.\n- Dépendance à un fournisseur : prévoir l'abstraction (`IChatClient`, AGENTS.md ouvert, MCP) pour changer de\n  modèle ou d'outil.\n- Un senior sait coder sans l'IA : en kata ou en entretien, ne pas dépendre de l'outil.\n\n## Questions d'entretien probables\n- **Comment utilises-tu les agents de code au quotidien ?** Exemples concrets par type de tâche, workflow\n  explorer → planifier → tests → petits diffs → revue, fichiers d'instructions partagés, ce que tu ne délègues pas.\n- **Quelle différence entre Copilot autocomplétion, agent mode et un agent CLI / asynchrone ?** Degré\n  d'autonomie, boucle outil, permissions, qui exécute, où se fait la revue.\n- **Qu'est-ce que MCP ? Pourquoi c'est utile ? Quels risques ?** Protocole standard host/client/server,\n  tools/resources/prompts, stdio/HTTP ; risques injection, supply chain, privilèges.\n- **Comment éviter qu'un agent fasse n'importe quoi dans le repo ?** Contexte (AGENTS.md), plan validé,\n  permissions et sandbox, hooks, branche + PR, CI, revue humaine.\n- **Qu'est-ce qu'une prompt injection ? Comment s'en protéger ?** Directe vs indirecte, lethal trifecta,\n  moindre privilège, humain dans la boucle pour les actions sensibles, pas de filtre magique.\n- **Peut-on utiliser l'IA sur du code bancaire ? À quelles conditions ?** Outils entreprise approuvés, pas de\n  données clients, revue, traçabilité, DORA (prestataire tiers), politique du groupe.\n- **Comment mesurerais-tu le gain de l'IA dans l'équipe ?** DORA metrics, temps de revue, défauts, DevEx ;\n  méfiance envers la perception (METR) ; expérimentation avant/après.\n- **L'IA rend-elle TDD obsolète ?** Au contraire : les tests sont la spécification exécutable et le filet qui\n  rend la génération sûre.\n- **RAG vs fine-tuning ?** RAG pour des connaissances privées/fraîches et sourcées, fine-tuning pour le\n  comportement/format ; commencer par le contexte.\n- **Comment intégrerais-tu un LLM dans un service .NET ?** `IChatClient`, Azure OpenAI via Managed Identity,\n  tool calling, OpenTelemetry, timeouts/retries, evals, coût, garde-fous de sortie.\n- **IA locale : intérêt et limites ?** Confidentialité vs qualité, tool calling, matériel, contexte.\n- **Utilises-tu l'IA sur un code que tu ne connais pas (legacy, langage inconnu) ? Comment garantir le\n  résultat ?** Tests de caractérisation/golden master, comparaison des sorties ancien/nouveau, validation métier.\n- **Quel rôle l'IA a-t-elle dans le KYC ?** Extraction de documents (OCR), contrôle de cohérence, aide à\n  l'analyste, détection d'anomalies ; décision et responsabilité humaines, explicabilité, AI Act, biais.\n\n## Pour aller plus loin\n- Anthropic : \"Building effective agents\", \"Effective context engineering for AI agents\", bonnes pratiques\n  Claude Code.\n- Spécification MCP : https://modelcontextprotocol.io ; SDK C# : https://github.com/modelcontextprotocol/csharp-sdk\n- `AGENTS.md` : https://agents.md ; Agent Skills : https://agentskills.io **(à vérifier)**\n- Microsoft Learn : \"Microsoft.Extensions.AI\", \"Microsoft Agent Framework\", \"Azure OpenAI data privacy\".\n- GitHub Docs : Copilot agent mode, Copilot coding agent, custom instructions, MCP.\n- OWASP Top 10 for LLM Applications 2025 : https://genai.owasp.org\n- Simon Willison, \"The lethal trifecta for AI agents\" (2025).\n- METR, \"Measuring the Impact of Early-2025 AI on Experienced Open-Source Developer Productivity\" (2025).\n- DORA, \"State of AI-assisted Software Development\" (2025).\n- Règlement (UE) 2024/1689 (AI Act), art. 4 et annexe III.\n"
+ },
+ "00-essentiel-poste.md": {
+  "title": "00 — L'essentiel du poste : questions quasi certaines et réponses",
+  "md": "# 00 — L'essentiel du poste : questions quasi certaines et réponses\n\n> Fiche **transverse** (pas un thème de la taxonomie) : elle croise la fiche de poste, le format de\n> l'entretien (tech lead + 1–2 devs, \"pas mal de questions techniques\", puis kata) et le contexte de la\n> squad User & KYC. Objectif : si tu sais répondre à voix haute à tout ce qui est ici, **la base est\n> assurée**. Les fiches 01 à 19 servent à approfondir.\n>\n> Aucune donnée personnelle ici. Les questions sur ton parcours sont dans `03-cv-entretien/questions-cv.md`.\n\n## Mode d'emploi\n\n- **★★★** : quasi certain (mot-clé explicite de la fiche de poste ou réflexe de tout tech lead .NET).\n  **★★** : très probable. Pas de ★ : rien ici n'est \"peut-être\".\n- Pour chaque question : cacher la réponse, répondre **à voix haute en 1 minute**, puis comparer.\n- **À dire** = la réponse orale, structurée, qui suffit dans 80 % des cas.\n  **Si on creuse** = la relance la plus probable. **Piège** = ce qui fait perdre des points.\n- Réflexe senior sur presque toutes les questions : **définition → quand l'utiliser → limite / coût →\n  exemple concret** (idéalement un exemple vécu ou un exemple KYC).\n- Les infos datées sont marquées **(à vérifier)**.\n\n## Le top 20 à savoir par cœur\n\nSi tu n'as qu'une heure : ces 20 questions couvrent l'essentiel de ce qu'un tech lead de cette squad\nvérifiera.\n\n| # | Question | Section |\n|---|----------|---------|\n| 1 | .NET Framework vs .NET : différences, comment migrer | Q1 |\n| 2 | async/await : fonctionnement et pièges | Q3 |\n| 3 | Durées de vie DI et captive dependency | Q6 |\n| 4 | SOLID avec exemples | Q15 |\n| 5 | TDD : cycle, intérêt, limites | Q19 |\n| 6 | Mock / stub / fake, sur-mocking | Q21 |\n| 7 | Aborder un code legacy sans tests | Q24 |\n| 8 | DDD stratégique vs tactique | Q27 |\n| 9 | Entité / Value Object / Agrégat | Q29 |\n| 10 | Découper le domaine KYC en bounded contexts | Q31 |\n| 11 | Clean Architecture / hexagonale | Q34 |\n| 12 | CQRS, et CQRS sans Event Sourcing | Q35 |\n| 13 | Event Sourcing : principe, avantages, inconvénients | Q41 |\n| 14 | Event Sourcing et RGPD | Q44 |\n| 15 | Saga, outbox, idempotence | Q38 / Q39 |\n| 16 | Service Bus vs Event Grid vs Event Hubs | Q46 |\n| 17 | Peek-lock, DLQ, messages en double | Q47 |\n| 18 | Stratégies de migration vers Azure | Q51 |\n| 19 | KYC, LCB-FT, SCA expliqués simplement | Q70 / Q71 |\n| 20 | Concevoir un service d'onboarding KYC | Q84 |\n\n---\n\n## 1. C# et runtime .NET (`csharp`)\n\n### Q1 ★★★ — .NET Framework vs .NET : quelles différences ? Comment migrer une application .NET Framework ?\n**À dire** : .NET Framework (4.8.x) est Windows-only, intégré à Windows, en maintenance (correctifs de\nsécurité, plus de nouveautés). .NET (ex-Core, aujourd'hui .NET 8/9/10) est cross-platform, open source,\nbeaucoup plus performant, conteneurisable, avec un cycle annuel (LTS les années paires, 3 ans de support).\nPour migrer : inventaire et analyse (dépendances, API Windows-only), d'abord les bibliothèques en\n**.NET Standard 2.0** ou multi-target, puis les applications, **par incréments** (strangler fig, YARP en\nfaçade pour basculer route par route), avec des tests de caractérisation avant de toucher.\n\n**Si on creuse** : ce qui n'existe plus : `System.Web` (HttpContext, modules/handlers → middlewares),\nWCF serveur (→ CoreWCF ou gRPC/REST), AppDomains, .NET Remoting, `web.config` (→ `appsettings.json` +\noptions), EF6 (→ EF Core, ou EF6 qui tourne aussi sur .NET). Outils : .NET Upgrade Assistant, analyseurs\nde portabilité. **Versions** : .NET 10 LTS (nov. 2025) ; .NET 8 LTS et .NET 9 STS en fin de support le\n10 nov. 2026 ; .NET 11 STS attendu nov. 2026 **(à vérifier)**.\n\n**Piège** : proposer un big bang. Dire \"on réécrit tout\" en banque = risque maximal.\n\n→ [02-csharp](02-csharp.md), [07-refacto](07-refacto.md)\n\n### Q2 ★★★ — class, struct, record : quelles différences ? Type valeur vs type référence ?\n**À dire** : `class` = type référence, alloué sur le tas, égalité par référence. `struct` = type valeur,\ncopié à l'affectation, pas d'héritage, adapté aux petites données immuables. `record` (class ou struct)\n= égalité **par valeur**, `ToString` lisible, `with` pour copier en modifiant, idéal pour **Value Objects**,\nDTO, messages et événements.\n\n**Si on creuse** : \"struct = pile\" est un raccourci faux (un struct champ d'une classe vit sur le tas).\nBoxing quand un struct passe en `object`/interface. `readonly struct`, `record struct`. Un record peut\nquand même être muable (`set`) : préférer `init`.\n\n**Piège** : record avec une collection → l'égalité compare la référence de la liste, pas son contenu.\n\n### Q3 ★★★ — Comment fonctionne async/await ? Quels pièges ?\n**À dire** : `async/await` libère le thread pendant une **attente d'I/O** : le compilateur transforme la\nméthode en machine à états, la suite s'exécute à la fin de la tâche. Gain = **scalabilité** (moins de\nthreads bloqués), pas vitesse d'un appel. Pour du CPU, c'est `Task.Run`/parallélisme, autre sujet.\n\n**Pièges** : `.Result`/`.Wait()` (blocage, deadlock avec un contexte de synchronisation, thread pool\nstarvation) ; `async void` (exceptions non capturables, sauf handlers d'événements) ; oublier le\n`CancellationToken` ; `Task.WhenAll` pour paralléliser des I/O indépendantes ; `ConfigureAwait(false)` utile\nen bibliothèque, inutile en ASP.NET Core (pas de SynchronizationContext).\n\n**Si on creuse** : `ValueTask` pour les chemins souvent synchrones (cache), à n'awaiter qu'une fois ;\n`IAsyncEnumerable` pour streamer ; `SemaphoreSlim` (pas `lock`) pour protéger une section async.\n\n### Q4 ★★ — IEnumerable vs IQueryable vs List ?\n**À dire** : `IEnumerable<T>` = itération en mémoire, exécution **différée** (LINQ to Objects).\n`IQueryable<T>` = arbre d'expression traduit par un provider (EF Core → SQL) : le filtre s'exécute en base.\n`List<T>` = collection matérialisée. Exposer `IQueryable` hors de la couche data = fuite d'abstraction.\n\n**Piège** : énumération multiple d'un `IEnumerable` (requête rejouée) ; `AsEnumerable()` trop tôt → tout\nrapatrier en mémoire puis filtrer.\n\n### Q5 ★★ — Comment fonctionne le Garbage Collector ? IDisposable ?\n**À dire** : GC générationnel (gen 0/1/2, + LOH pour les objets ≥ 85 Ko), libère la mémoire **managée**.\nLes ressources **non managées** (connexions, fichiers, sockets) se libèrent avec `IDisposable` + `using` ;\nle finaliseur n'est qu'un filet de sécurité. `IAsyncDisposable` + `await using` pour les libérations async.\n\n**Piège** : `new HttpClient()` dans un `using` à chaque appel → épuisement des sockets ; utiliser\n`IHttpClientFactory`.\n\n### Q6 ★★★ — Quelles durées de vie en injection de dépendances ? Quel piège ?\n**À dire** : **Transient** (nouvelle instance à chaque résolution), **Scoped** (une par requête HTTP / par\nscope), **Singleton** (une pour toute l'application, doit être thread-safe). `DbContext` est scoped.\n\n**Piège** : la **captive dependency** : un singleton qui reçoit un scoped (ex. `DbContext`) le garde à vie →\nbugs de concurrence et données périmées. ASP.NET Core le détecte en dev (`ValidateScopes`). Dans un\n`BackgroundService` (singleton), créer un scope via `IServiceScopeFactory` par message traité.\n\n### Q7 ★★★ — Pourquoi `decimal` et pas `double` pour des montants ?\n**À dire** : `double` est binaire flottant : 0,1 n'est pas représentable exactement → erreurs d'arrondi\ncumulées. `decimal` est en base 10 (28–29 chiffres significatifs), exact pour les montants. En banque :\n`decimal` + règle d'arrondi explicite (`MidpointRounding.ToEven` \"bancaire\" ou `AwayFromZero` selon la règle\nmétier) + **Value Object `Money`** (montant + devise, interdiction d'additionner deux devises).\n\n**Si on creuse** : stocker en base en `decimal(19,4)` ou en centimes entiers ; ISO 4217 pour les devises.\n\n### Q8 ★★ — Exceptions ou Result pattern ? `throw` vs `throw ex` ?\n**À dire** : exception pour l'**exceptionnel** (panne, bug, invariant violé) ; résultat typé (`Result<T>`,\nunion de cas) pour les **échecs métier attendus** (KYC refusé, document illisible) qui font partie du flux.\n`throw;` conserve la stack trace, `throw ex;` la réinitialise. Ne jamais avaler une exception sans log.\nCôté API : un middleware global qui traduit en `ProblemDetails`.\n\n### Q9 ★★ — Qu'apportent les nullable reference types ?\n**À dire** : analyse statique qui distingue `string` (non null) de `string?`. Les NullReferenceException\ndeviennent des warnings à la compilation. Sur un legacy : activer fichier par fichier (`#nullable enable`),\npasser les warnings en erreurs sur le nouveau code. Ce n'est pas une garantie runtime (désérialisation,\n`!` abusif).\n\n### Q10 ★★ — Quelles nouveautés récentes de C# utilises-tu ?\n**À dire** (citer 4–5 que tu emploies vraiment) : records et `init` ; pattern matching (`switch` expressions,\npatterns de propriétés, de liste) ; `required` ; primary constructors (C# 12) ; collection expressions\n`[..]` ; file-scoped namespaces ; raw string literals. C# 14 (.NET 10) : mot-clé `field` dans les\npropriétés, **extension members** (blocs `extension`), affectation null-conditionnelle `a?.B = x`\n**(à vérifier si on te pousse dans le détail)**.\n\n**Piège** : citer une feature sans savoir l'expliquer. Mieux vaut 3 features maîtrisées.\n\n### Q11 ★★ — Comment rendre du code thread-safe ?\n**À dire** : d'abord **éviter l'état partagé** (immutabilité, données par requête). Sinon : `lock` (sections\ncourtes, synchrones), `Interlocked` (compteurs), collections `Concurrent*` (`ConcurrentDictionary`,\n`Channel<T>` pour producteur/consommateur), `SemaphoreSlim` pour l'async. Attention : en multi-instances\n(scale-out Azure), un `lock` ne protège rien entre instances → concurrence optimiste en base, lease de\nblob, sessions Service Bus.\n\n**Piège** : `ConcurrentDictionary.GetOrAdd` peut exécuter la factory plusieurs fois (`Lazy<T>` pour l'éviter).\n\n---\n\n## 2. API REST et ASP.NET Core (`aspnet-api`)\n\n### Q12 ★★★ — Comment conçois-tu une API REST propre ?\n**À dire** : ressources au pluriel (`/customers/{id}/documents`), verbes HTTP sémantiques, codes adaptés\n(`200`, `201` + `Location`, `202` pour un traitement asynchrone, `204`, `400` validation, `401` non\nauthentifié, `403` non autorisé, `404`, `409` conflit/version, `422`, `429`), erreurs au format\n**ProblemDetails** (RFC 9457), pagination, versioning (URL ou header), contrat **OpenAPI**.\n**Idempotence** : GET/PUT/DELETE le sont par définition ; pour un POST sensible (création de dossier,\npaiement), header **`Idempotency-Key`** stocké côté serveur.\n\n**Si on creuse** : traitement long (vérification d'identité) → `202 Accepted` + ressource de statut ou\nwebhook/événement. Concurrence : `ETag` + `If-Match` → `412`.\n\n### Q13 ★★★ — OAuth2 / OpenID Connect : comment ça marche ? Quel flow pour quel cas ?\n**À dire** : OAuth2 = **délégation d'autorisation** (access token) ; OIDC = couche d'**authentification**\nau-dessus (ID token, identité de l'utilisateur). Flows : **Authorization Code + PKCE** pour un utilisateur\n(web, mobile, SPA) ; **Client Credentials** pour du service à service ; Implicit et Password sont\ndépréciés. L'API valide le JWT : signature (clés JWKS), `iss`, `aud`, expiration, puis autorise via\nscopes/rôles/**policies**.\n\n**Si on creuse** : authentification ≠ autorisation ; dans Azure, **Entra ID** + **Managed Identity** pour\nle service à service sans secret ; tokens courts + refresh tokens ; ne jamais logguer un token.\n\n**Piège** : vérifier les droits sur la ressource elle-même (BOLA : le client X ne doit pas lire le dossier\ndu client Y même avec un token valide). Voir Q63.\n\n### Q14 ★★ — Middleware vs filtre ? Comment rendre un appel HTTP sortant résilient ?\n**À dire** : le **middleware** agit sur tout le pipeline (auth, logs, gestion d'erreurs, ordre important) ;\nle **filtre** agit dans MVC autour des actions (validation, autorisation fine). Appels sortants :\n`IHttpClientFactory` + **résilience** (`Microsoft.Extensions.Http.Resilience` / Polly v8) : **timeout**,\n**retry avec backoff exponentiel + jitter** (seulement sur erreurs transitoires et opérations\nidempotentes), **circuit breaker**, éventuellement bulkhead.\n\n**Piège** : retry sur un POST non idempotent → double création.\n\n---\n\n## 3. Clean Code, SOLID, design patterns (`clean-code`)\n\n### Q15 ★★★ — Explique SOLID avec un exemple pour chaque principe\n**À dire** :\n- **S** — une classe, une raison de changer : le calcul de risque KYC ne fait pas aussi l'envoi d'e-mail.\n- **O** — ouvert à l'extension, fermé à la modification : ajouter une règle de vigilance = ajouter une\n  classe `IRiskRule`, pas modifier un `switch` géant.\n- **L** — un sous-type doit pouvoir remplacer son parent sans surprise (pas de `NotImplementedException`\n  dans une méthode héritée).\n- **I** — interfaces petites et ciblées : `IDocumentReader` plutôt qu'un `IDocumentService` à 15 méthodes.\n- **D** — le domaine dépend d'abstractions (`IIdentityVerifier`), l'infrastructure les implémente (adaptateur\n  du fournisseur). C'est la base de l'hexagonal.\n\n**Piège** : réciter les définitions sans exemple, ou appliquer SOLID de façon dogmatique (une interface\npar classe \"au cas où\").\n\n### Q16 ★★★ — Quels design patterns utilises-tu vraiment ?\n**À dire** (patterns + cas d'usage) : **Strategy** (règles de calcul interchangeables), **Factory**\n(choisir la stratégie selon le type de client), **Decorator** (ajouter cache, retry, logs autour d'un\nservice sans le modifier), **Adapter** (encapsuler un fournisseur externe de vérification d'identité),\n**Specification** (règles métier combinables), **State** (cycle de vie d'un dossier KYC), Repository,\nObserver/événements de domaine.\n\n**Si on creuse** : ne pas introduire un pattern sans douleur réelle (YAGNI) ; un `switch` de 3 cas lisible\nvaut mieux qu'une hiérarchie de 6 classes.\n\n### Q17 ★★★ — Qu'est-ce que du code propre pour toi ? Quels code smells repères-tu ?\n**À dire** : du code qui **dit ce qu'il fait** dans le langage du métier, facile à changer, couvert par des\ntests qui documentent le comportement. Smells : méthodes longues, conditionnels imbriqués, duplication,\n**primitive obsession** (un `string` pour un IBAN), feature envy, noms vagues (`Manager`, `Helper`, `data`),\ncommentaires qui compensent un mauvais nommage, classes \"Dieu\", effets de bord cachés.\n\n**Si on creuse** : Clean Code n'est pas un dogme (méthodes de 3 lignes partout = fragmentation) ; la\nlisibilité se juge en équipe, en revue.\n\n### Q18 ★★ — Composition ou héritage ?\n**À dire** : préférer la **composition** : couplage plus faible, comportements combinables, testable.\nL'héritage pour une vraie relation \"est un\" stable, peu profonde. Héritage pour factoriser du code = piège\nclassique (classes de base fourre-tout).\n\n---\n\n## 4. Tests, TDD, BDD (`tests`)\n\n### Q19 ★★★ — C'est quoi le TDD pour toi ? Le pratiques-tu vraiment ?\n**À dire** : cycle **Red → Green → Refactor** en très petits pas : un test qui échoue, le code minimal pour\nle faire passer, puis on nettoie, tests au vert. C'est d'abord un **outil de design** (on conçoit l'API du\npoint de vue de l'appelant) et un filet de sécurité pour refactorer. Bénéfices : moins de code inutile,\ntests qui documentent, feedback rapide.\n\n**Si on creuse** : je l'applique surtout sur la logique métier (règles, calculs, machines à états) ; moins\npertinent pour du code d'intégration pur ou une exploration (spike puis on jette). Être honnête sur ta\npratique réelle, avec un exemple.\n\n**Piège** : dire \"je fais du TDD à 100 %\" puis écrire le code avant le test pendant le kata. Ils\nregarderont.\n\n### Q20 ★★★ — Pyramide des tests ? Qu'est-ce qu'un bon test unitaire ?\n**À dire** : beaucoup de tests unitaires rapides, moins de tests d'intégration, peu de tests end-to-end.\nBon test : **FIRST** (Fast, Isolated, Repeatable, Self-validating, Timely), structure\n**Arrange/Act/Assert**, un comportement par test, nom qui décrit la règle\n(`Should_require_enhanced_due_diligence_when_customer_is_PEP`), teste le **comportement** pas\nl'implémentation.\n\n**Si on creuse** : \"unitaire\" = unité de **comportement**, pas forcément une classe (école de Chicago vs\nLondres). Tests d'API : `WebApplicationFactory` ; base réelle : **Testcontainers** (SQL Server, Cosmos\nemulator, Service Bus emulator **(à vérifier)**).\n\n### Q21 ★★★ — Mock, stub, fake : quelle différence ? Quand mocker ?\n**À dire** : **stub** = renvoie des réponses préparées (contrôle les entrées indirectes) ; **mock** = vérifie\nles interactions (on asserte qu'un appel a eu lieu) ; **fake** = implémentation simplifiée qui fonctionne\n(repository en mémoire). Mocker les **frontières** (fournisseur externe, horloge, bus), pas le domaine.\n\n**Piège** : le sur-mocking : des tests qui reproduisent l'implémentation, cassent à chaque refactoring et\nne détectent aucun bug (\"tester les mocks\"). Injecter `TimeProvider` plutôt que `DateTime.Now`.\n\n### Q22 ★★★ — BDD : c'est quoi ? Gherkin ? Différence avec TDD ?\n**À dire** : BDD = **collaboration** métier / dev / QA autour d'exemples concrets (ateliers \"three amigos\",\nexample mapping), formalisés en **Given / When / Then**. Les scénarios deviennent des tests exécutables\n(Reqnroll, successeur de SpecFlow arrêté fin 2024) et une documentation vivante. TDD = discipline du\ndéveloppeur au niveau du code ; BDD = alignement sur le comportement attendu au niveau du besoin. Ils se\ncomplètent.\n\n**Exemple KYC** : *Given un client majeur résidant en France, When il est identifié comme PPE, Then le\ndossier passe en vigilance renforcée.*\n\n**Piège** : du Gherkin écrit seul par les devs, très technique : on a le coût du BDD sans le bénéfice.\n\n### Q23 ★★ — Couverture de code : quel objectif ? Mutation testing ?\n**À dire** : la couverture dit ce qui **n'est pas** testé, pas ce qui est bien testé (100 % sans assertion\nest possible). Le **mutation testing** (Stryker.NET) modifie le code (`>` → `>=`, suppression d'appel) et\nvérifie que les tests échouent : mesure la qualité des assertions. Utile sur le code métier critique.\n\n---\n\n## 5. Refactoring et legacy (`refacto`)\n\n### Q24 ★★★ — Comment abordes-tu un code legacy sans tests ?\n**À dire** (méthode de Feathers) : 1) identifier la zone à changer ; 2) trouver les **points de test**\n(seams) ; 3) casser les dépendances au minimum et en sécurité (extraire une interface, paramètre,\nméthode virtuelle) ; 4) poser des **tests de caractérisation** / golden master qui figent le comportement\n**actuel**, bugs compris ; 5) refactorer en petits pas, tests au vert, commit à chaque pas ; 6) seulement\nensuite, changer le comportement en TDD.\n\n**Si on creuse** : outils : approval tests (Verify), couverture pour vérifier que les branches sont\nexercées, mutation testing pour vérifier le filet. Refactorings automatisés de l'IDE (sûrs) plutôt\nqu'à la main.\n\n**Piège** : corriger un bug découvert pendant le refactoring sans le signaler : un \"bug\" peut être un\ncomportement dont un client dépend. On le note, on en parle au PO.\n\n### Q25 ★★★ — Refactoring ou réécriture ?\n**À dire** : réécriture totale = risque élevé (règles implicites perdues, double maintenance, effet tunnel).\nPréférer le **refactoring incrémental** et, à l'échelle d'un système, le **strangler fig** : une façade\nroute progressivement vers le nouveau code, fonctionnalité par fonctionnalité, avec une **anti-corruption\nlayer** entre ancien et nouveau modèle. On réécrit un module quand il est petit, bien délimité et que\nses comportements sont capturés par des tests.\n\n### Q26 ★★★ — Que regardes-tu dans une revue de code ?\n**À dire** (du plus important au moins important) : 1) **correction** : le code fait-il ce que demande le\nticket, cas limites, concurrence, erreurs ; 2) **sécurité** : données sensibles, autorisation, injection,\nsecrets, logs ; 3) **tests** : présents, pertinents, testent le comportement ; 4) **design** : responsabilités,\ncouplage, cohérence avec l'architecture ; 5) lisibilité et nommage ; 6) style (que l'outillage devrait\ndéjà gérer). Ton : questions plutôt qu'ordres, distinguer bloquant / suggestion.\n\n→ [07-refacto, section revue de code](07-refacto.md#revue-de-code-existant)\n\n---\n\n## 6. Domain Driven Design (`ddd`)\n\n### Q27 ★★★ — C'est quoi le DDD ? Stratégique vs tactique ?\n**À dire** : approche qui place le **modèle du domaine métier** au centre, construit avec les experts.\n**Stratégique** (le plus important) : langage omniprésent (**ubiquitous language**), découpage en\n**bounded contexts**, relations entre contextes (**context map**), distinction core / supporting / generic\nsubdomain pour savoir où investir. **Tactique** : briques de code : entités, value objects, agrégats,\ndomain events, repositories, domain services, factories.\n\n**Si on creuse** : le DDD vaut pour un domaine **complexe** et changeant (le KYC l'est : règles\nréglementaires, risques, cas particuliers) ; pour du CRUD simple, c'est du sur-design.\n\n**Piège** : réduire le DDD aux patterns tactiques (\"on a des repositories donc on fait du DDD\").\n\n### Q28 ★★★ — Bounded context, ubiquitous language, context map : explique\n**À dire** : un **bounded context** est une frontière dans laquelle un modèle et un vocabulaire ont un sens\nunique. Exemple : \"Client\" n'a pas le même sens dans l'onboarding (un prospect avec des pièces à vérifier)\net dans la facturation (un payeur). Le **langage omniprésent** est utilisé dans les conversations, le code,\nles tests. La **context map** décrit les relations : customer/supplier, conformist, **anti-corruption layer**\n(on traduit le modèle d'un système externe ou legacy pour ne pas polluer le nôtre), shared kernel,\nopen host service / published language.\n\n**Si on creuse** : un bounded context est souvent un bon candidat de microservice, mais pas obligatoirement\n(un monolithe modulaire peut contenir plusieurs contextes).\n\n### Q29 ★★★ — Entité, Value Object, Agrégat : règles d'un agrégat ?\n**À dire** : **entité** = identité stable dans le temps (un client, un dossier KYC). **Value Object** =\ndéfini par ses valeurs, immuable, auto-validant (`Iban`, `Money`, `Address`, `DateOfBirth`) : élimine la\nprimitive obsession. **Agrégat** = grappe d'objets cohérente avec une **racine** seule point d'entrée, qui\ngarantit les **invariants**. Règles : une transaction modifie **un seul agrégat** ; on référence les autres\nagrégats **par identifiant** ; agrégats **petits** ; cohérence entre agrégats **éventuelle**, via\ndomain events.\n\n**Exemple** : `KycCase` (racine) contient ses `Documents` et son statut ; invariant : impossible de valider\nle dossier si un document obligatoire n'est pas vérifié ou si le screening n'est pas fait.\n\n### Q30 ★★★ — Domain event vs integration event ?\n**À dire** : **domain event** = fait métier passé, interne au bounded context (`DocumentVerified`), traité\nsouvent dans le même processus. **Integration event** = contrat **public** publié vers d'autres contextes\n(`CustomerOnboarded` sur Service Bus) : versionné, stable, contenu minimal et sans fuite du modèle interne.\nNom au passé, immuable.\n\n### Q31 ★★★ — Comment découperais-tu le domaine User & KYC ?\n**À dire** (proposition, à confronter à leur réalité) :\n- **Onboarding / Entrée en relation** : parcours, collecte des informations, orchestration (core).\n- **Vérification d'identité** : documents, selfie/liveness, souvent via fournisseur externe → **ACL**.\n- **Screening** : sanctions, gel des avoirs, PPE (souvent fournisseur externe).\n- **Évaluation du risque** : scoring, niveau de vigilance (core, règles métier riches).\n- **Profil client / référentiel** : données à jour, revue périodique (KYC refresh).\n- **Authentification / SCA** : autre équipe → relation customer/supplier ou conformist.\nLes contextes communiquent par événements (`IdentityVerified`, `ScreeningCompleted`, `RiskAssessed`) ;\nle dossier `KycCase` a un cycle de vie (machine à états) : `Draft → Submitted → UnderReview →\nApproved / Rejected / PendingInformation`.\n\n**Bonne attitude** : finir par une question : *\"comment est-ce découpé chez vous aujourd'hui ?\"*\n\n→ [18-banque, modèle d'onboarding](18-banque.md)\n\n### Q32 ★★★ — Modèle anémique : c'est quoi, pourquoi c'est un problème ?\n**À dire** : des entités avec seulement des getters/setters, et toute la logique dans des \"services\". Les\ninvariants sont dispersés, n'importe qui peut mettre l'objet dans un état invalide (`case.Status =\nApproved` sans contrôle). Modèle riche : méthodes métier qui protègent les invariants\n(`kycCase.Approve(reviewer)` qui lève une erreur si le screening manque), setters privés.\n\n**Nuance** : le modèle anémique est acceptable pour du CRUD sans règles.\n\n### Q33 ★★★ — Comment introduirais-tu le DDD dans un existant (refactoring DDD) ?\n**À dire** : pas de big bang. 1) **Event storming** avec le métier pour cartographier le domaine et faire\némerger le langage ; 2) identifier le **core domain** et les contextes ; 3) poser des tests de\ncaractérisation ; 4) introduire des **Value Objects** (gain rapide, peu risqué) ; 5) déplacer la logique\ndes services vers les entités (modèle riche) ; 6) isoler l'existant derrière une **ACL** et extraire un\ncontexte à la fois (strangler fig).\n\n---\n\n## 7. Architecture (`archi`)\n\n### Q34 ★★★ — Clean Architecture vs hexagonale : quelle règle centrale ?\n**À dire** : même idée : le **domaine au centre**, indépendant des frameworks, de la base, du bus. Règle de\ndépendance : les dépendances pointent **vers l'intérieur**. Hexagonale (ports & adapters) : le domaine\ndéfinit des **ports** (interfaces), l'infrastructure fournit les **adapters** (SQL, Service Bus, API\nexterne), côté entrant (API, consumer) et sortant. Clean Architecture : couches concentriques (Domain,\nApplication/use cases, Infrastructure, Presentation). Bénéfice : domaine testable sans infrastructure,\ninfrastructure remplaçable (migration cloud !).\n\n**Piège** : multiplier projets et couches pour un service simple ; mapper 4 fois le même objet sans valeur.\n\n### Q35 ★★★ — CQRS : quand ? Est-ce lié à l'Event Sourcing ?\n**À dire** : séparer le modèle d'**écriture** (commandes, règles, invariants) du modèle de **lecture**\n(requêtes, projections optimisées pour l'affichage). Utile quand lecture et écriture ont des besoins très\ndifférents (charge, forme des données). **Indépendant** de l'Event Sourcing : on peut faire du CQRS avec une\nseule base (deux modèles de code), ou deux bases synchronisées. L'ES, lui, pousse presque toujours vers le\nCQRS (on ne requête pas un flux d'événements).\n\n**Si on creuse** : coût = cohérence éventuelle côté lecture, plus de code. MediatR est souvent utilisé pour\ndispatcher commandes/requêtes ; il est passé sous **licence commerciale** en 2025 : on peut s'en passer\n(simples handlers injectés).\n\n### Q36 ★★ — Monolithe, monolithe modulaire, microservices : comment choisir ?\n**À dire** : microservices = déploiement indépendant, autonomie d'équipe, scalabilité ciblée ; coût =\ncomplexité distribuée (réseau, cohérence, observabilité, ops). Un **monolithe modulaire** bien découpé en\nbounded contexts est souvent le meilleur point de départ ; on extrait un service quand un besoin réel\n(cadence de déploiement, charge, équipe) le justifie.\n\n**Piège** : le **monolithe distribué** : des services qui doivent être déployés ensemble ou partagent une base.\n\n---\n\n## 8. Microservices et patterns distribués (`microservices`)\n\n### Q37 ★★★ — Communication synchrone ou asynchrone entre services ?\n**À dire** : **synchrone** (HTTP/gRPC) quand l'appelant a besoin de la réponse tout de suite (lecture,\nvalidation) ; couplage temporel : si l'appelé tombe, l'appelant souffre (→ timeouts, circuit breaker).\n**Asynchrone** (Service Bus, événements) pour les traitements longs, la propagation de faits, le\ndécouplage et l'absorption des pics. Un onboarding KYC, avec des fournisseurs externes lents, est\nnaturellement asynchrone.\n\n### Q38 ★★★ — Comment gérer une transaction qui traverse plusieurs microservices ?\n**À dire** : pas de transaction distribuée (2PC) en pratique. On utilise une **saga** : une suite de\ntransactions locales, chacune publiant un événement ; en cas d'échec, des **actions compensatoires**\n(annuler, marquer, notifier). **Chorégraphie** : chaque service réagit aux événements (simple, mais flux\ndifficile à suivre) ; **orchestration** : un orchestrateur pilote les étapes (flux explicite, état\ncentralisé ; ex. Durable Functions, ou machine à états du dossier).\n\n**Si on creuse** : chaque étape doit être **idempotente** ; la compensation n'est pas un rollback (on ne\n\"désenvoie\" pas un e-mail) ; timeouts et états intermédiaires visibles.\n\n### Q39 ★★★ — C'est quoi le pattern Outbox ? Pourquoi ?\n**À dire** : problème du **dual write** : sauvegarder en base **et** publier un message ne sont pas\natomiques ; si le service tombe entre les deux, l'état et les événements divergent. Outbox : dans la\n**même transaction** que la donnée métier, on écrit l'événement dans une table `Outbox` ; un process\nséparé (ou le change feed Cosmos) publie ensuite sur le bus et marque comme envoyé. Garantit\n**at-least-once** → le consommateur doit être idempotent (pattern **Inbox** : table des messages déjà traités).\n\n### Q40 ★★★ — Idempotence : pourquoi, comment ?\n**À dire** : avec un bus, la livraison est **au moins une fois** : un message peut arriver deux fois (retry,\ncrash avant `Complete`). Le \"exactly once\" de bout en bout n'existe pas, on fait **exactly-once processing**\npar idempotence : identifiant de message/de commande stocké et vérifié (contrainte unique), opérations\nnaturellement idempotentes (`SetStatus` plutôt que `Increment`), concurrence optimiste sur la version.\nCôté API : `Idempotency-Key`.\n\n---\n\n## 9. Event Sourcing (`event-sourcing`)\n\n### Q41 ★★★ — C'est quoi l'Event Sourcing ? Avantages, inconvénients ?\n**À dire** : on ne stocke pas l'état courant mais la **suite des événements** qui l'ont produit\n(`KycCaseOpened`, `DocumentSubmitted`, `IdentityVerified`, `CaseApproved`), en **append-only**. L'état se\nreconstruit en rejouant les événements (fold). **Avantages** : **audit trail complet et natif** (précieux\nen banque et pour le régulateur), historique et \"voyage dans le temps\", projections multiples créées\naprès coup, intégration naturelle avec l'événementiel. **Inconvénients** : complexité, versioning des\névénements, cohérence éventuelle des lectures, courbe d'apprentissage, RGPD, requêtes impossibles sans\nprojections.\n\n**Si on creuse** : ES ≠ architecture événementielle (on peut publier des événements sans faire d'ES) ;\nl'ES se justifie sur un **agrégat core** avec forte valeur d'historique, pas sur tout le système.\n\n### Q42 ★★★ — Projections, read models : comment ça marche ? Comment les reconstruire ?\n**À dire** : une **projection** consomme le flux d'événements et maintient un modèle de lecture (table SQL,\ndocument Cosmos, index de recherche). Elle est **jetable** : on peut la supprimer et la reconstruire en\nrejouant tous les événements (nouveau besoin, bug corrigé). Elle doit être idempotente et suivre sa\nposition (checkpoint). La lecture est **éventuellement cohérente** : l'UI doit le gérer (retour de la\ncommande avec la version, polling, read-your-writes).\n\n### Q43 ★★★ — Concurrence, snapshots, versioning des événements ?\n**À dire** : **concurrence optimiste** : on écrit avec la **version attendue** du flux ; si quelqu'un a écrit\nentre-temps, conflit → recharger et rejouer la commande. **Snapshots** : pour les flux longs, on stocke\npériodiquement l'état pour ne rejouer que la fin (optimisation, à n'ajouter que si mesuré). **Versioning** :\nles événements sont immuables et éternels ; ajouter des champs optionnels (compatible), sinon nouvelle\nversion d'événement + **upcasting** à la lecture. Ne jamais modifier un événement stocké.\n\n### Q44 ★★★ — Event Sourcing et RGPD : comment supprimer des données dans un log immuable ?\n**À dire** : **crypto-shredding** : les données personnelles des événements sont chiffrées avec une clé\npar personne (stockée dans un coffre, ex. Key Vault ou table de clés) ; pour \"effacer\", on détruit la clé :\nles données deviennent illisibles. Autre option : ne mettre dans les événements que des références, les\ndonnées personnelles étant dans un stockage à part, effaçable. **Nuance banque** : le droit à\nl'effacement est limité par les **obligations LCB-FT** de conservation (5 ans après la fin de la relation\nd'affaires) : on purge à l'issue de la durée légale, pas à la demande.\n\n### Q45 ★★ — Quel event store en .NET / Azure ?\n**À dire** : **EventStoreDB** (renommé **KurrentDB**), **Marten** (sur PostgreSQL, très utilisé en .NET),\nou une implémentation sur **Cosmos DB** : un document par événement, partition key = id du flux, batch\ntransactionnel dans une partition pour l'append, **change feed** pour alimenter les projections. Ou une\ntable SQL append-only avec contrainte unique `(StreamId, Version)`.\n\n---\n\n## 10. Messaging Azure (`messaging`)\n\n### Q46 ★★★ — Service Bus vs Event Grid vs Event Hubs ?\n**À dire** :\n- **Service Bus** : **messages métier** à forte valeur (commandes, événements d'intégration) : queues et\n  topics/subscriptions, transactions, sessions (ordre), dead-letter, duplicate detection. Le choix pour un\n  flux KYC.\n- **Event Grid** : **notification d'événements** réactive, push, routage par filtres (ex. \"un blob a été\n  déposé\" → déclencher l'analyse d'un document). Faible latence, pas de file durable longue.\n- **Event Hubs** : **streaming** à haut débit (télémétrie, logs, IoT, millions d'événements/s), partitions,\n  rétention, relecture par offset, compatible Kafka.\n\n**Phrase clé** : *message = intention / donnée dont l'émetteur attend le traitement ; event = notification\nd'un fait ; stream = flux continu.*\n\n### Q47 ★★★ — Comment un message Service Bus est-il consommé ? Que se passe-t-il en cas d'échec ?\n**À dire** : mode **peek-lock** (par défaut) : le message est verrouillé pendant la *lock duration* ; le\nconsommateur fait `Complete` (supprimé), `Abandon` (redisponible, compteur de livraison +1),\n`DeadLetter` (mis de côté explicitement) ou `Defer`. Après **MaxDeliveryCount** (10 par défaut) échecs, le\nmessage part en **dead-letter queue (DLQ)** : il faut la **surveiller** (alerte) et avoir une procédure de\nretraitement. Mode **receive-and-delete** : rapide mais perte possible.\n\n**Si on creuse** : traitement plus long que le lock → renouvellement automatique du lock (le SDK le fait\navec `MaxAutoLockRenewalDuration`) ; erreur **non transitoire** (message invalide) → DLQ directe plutôt que\n10 retries ; erreur transitoire → retry, éventuellement replanification avec délai (`ScheduledEnqueueTime`).\n\n### Q48 ★★★ — Comment garantir l'ordre des messages ?\n**À dire** : par défaut pas de garantie d'ordre stricte. **Sessions** Service Bus : tous les messages avec\nle même `SessionId` (ex. id du client / du dossier) sont traités dans l'ordre, par un seul consommateur à\nla fois : ordre **par entité** tout en gardant du parallélisme entre entités. Alternative : rendre le\ntraitement tolérant au désordre (numéro de version, ignorer un événement plus ancien que l'état).\n\n### Q49 ★★ — Queue ou topic ? Duplicate detection ?\n**À dire** : **queue** = point à point, un message traité par un consommateur (competing consumers pour\nscaler). **Topic** = publish/subscribe : chaque **subscription** reçoit sa copie, avec filtres (SQL ou\ncorrelation). **Duplicate detection** : Service Bus ignore un message dont le `MessageId` a déjà été vu\ndans une fenêtre de temps : protège contre les doublons **à l'envoi**, pas contre la double livraison\nau consommateur → l'idempotence côté consommateur reste nécessaire.\n\n### Q50 ★★ — Standard ou Premium ? Comment sécuriser Service Bus ?\n**À dire** : Premium = ressources dédiées, performances prévisibles, messages jusqu'à 100 Mo, intégration\nréseau privée (VNet, private endpoints), géo-réplication **(détails à vérifier)** : le choix probable en\nbanque. Sécurité : **Managed Identity + RBAC** (rôles *Azure Service Bus Data Sender/Receiver*) plutôt que\nchaînes de connexion SAS, private endpoints, chiffrement (clés gérées par le client si exigé).\n\n---\n\n## 11. Azure et migration cloud (`azure`)\n\n### Q51 ★★★ — Comment migrer une application vers Azure ? Quelles stratégies ?\n**À dire** : partir d'un **inventaire** (dépendances, données, flux, contraintes de sécurité et de\nconformité), puis choisir **par application** : **Rehost** (lift & shift sur VM : rapide, peu de gains),\n**Replatform** (ex. App Service, Azure SQL, peu de modifications), **Refactor / Rearchitect** (PaaS natif,\nFunctions, Service Bus, conteneurs), **Rebuild**, **Replace** (SaaS), ou **Retire / Retain**. Migration\n**incrémentale**, environnements, tests de non-régression, plan de bascule et de **retour arrière**,\nobservabilité avant la bascule.\n\n**Bloquants classiques d'une app .NET Framework** : état en session en mémoire, écriture sur le disque\nlocal, authentification Windows intégrée, dépendances COM/GAC, tâches planifiées Windows, configuration\ndans `web.config` avec secrets, appels à des ressources on-premise (→ connectivité hybride).\n\n**Banque** : réversibilité et plan de sortie (DORA), localisation des données, validation sécurité/RSSI.\n\n### Q52 ★★★ — IaaS, PaaS, FaaS : différences ? Quand choisir quoi ?\n**À dire** : **IaaS** (VM) : contrôle total, tu gères l'OS et les patchs ; pour du legacy non portable.\n**PaaS** (App Service, Azure SQL, Container Apps) : tu gères l'application, Azure gère la plateforme : le\ndéfaut raisonnable. **FaaS** (Azure Functions) : code événementiel, facturation à l'exécution, scale\nautomatique ; idéal pour des traitements déclenchés par événements (message, blob, timer) ; limites :\ncold start, durée d'exécution, état. **Conteneurs** : Container Apps (serverless, KEDA, Dapr) avant AKS si\non n'a pas besoin de toute la puissance de Kubernetes.\n\n### Q53 ★★★ — Azure Functions : modèles, plans, pièges ?\n**À dire** : triggers (HTTP, Service Bus, Timer, Blob, Event Grid, Cosmos DB change feed) et bindings.\nModèle **isolated worker** (process séparé, versions .NET récentes, middleware, DI standard) :\nl'**in-process** arrive en **fin de support le 10 novembre 2026** **(à vérifier)** → sujet de migration\nd'actualité. Plans : Consumption, **Flex Consumption** (réseau privé, instances toujours prêtes),\nPremium (pas de cold start, VNet), Dedicated (App Service). **Durable Functions** pour orchestrer\n(saga, attente d'événement externe, timeouts).\n\n**Pièges** : cold start, timeout, idempotence du trigger Service Bus, `HttpClient` statique / factory.\n\n### Q54 ★★★ — Comment gères-tu les secrets et l'identité dans Azure ?\n**À dire** : **aucun secret dans le code ni dans le repo**. **Managed Identity** pour que les services\ns'authentifient auprès des ressources Azure (SQL, Service Bus, Key Vault, Storage) **sans secret**, avec\nRBAC au moindre privilège. Les secrets restants (clés de fournisseurs externes) dans **Key Vault**,\nréférencés depuis la config (`DefaultAzureCredential`, références Key Vault d'App Service), avec rotation.\nEn CI/CD : **workload identity federation** (OIDC) plutôt que des secrets de service principal.\n\n### Q55 ★★ — Réseau et sécurité d'une application PaaS bancaire ?\n**À dire** : **private endpoints** pour que les services PaaS (SQL, Storage, Service Bus, Key Vault)\nne soient pas exposés sur Internet ; intégration VNet des apps ; exposition publique via **Application\nGateway + WAF** ou **Front Door**, ou **API Management** comme façade des API (auth, quotas, versioning) ;\nNSG ; chiffrement en transit (TLS 1.2+) et au repos. Principe : **zero trust**, défense en profondeur.\n\n---\n\n## 12. Données : SQL, EF Core, Cosmos DB (`data`)\n\n### Q56 ★★★ — SQL ou NoSQL (Cosmos DB) : comment choisir ?\n**À dire** : **SQL** : relations, transactions ACID multi-tables, requêtes ad hoc, reporting. **Cosmos DB** :\nscalabilité horizontale, latence faible, schéma flexible, distribution mondiale, accès par clé connue.\nChoisir selon les **patterns d'accès**, pas par mode. En DDD : un agrégat = un document est un bon\nalignement avec Cosmos.\n\n### Q57 ★★★ — Cosmos DB : partition key, RU, niveaux de cohérence ?\n**À dire** : la **partition key** est la décision la plus importante : forte cardinalité, répartition\nuniforme des écritures et du stockage, et requêtes les plus fréquentes **dans une seule partition**\n(ex. `customerId`). Une partition logique est limitée à 20 Go. Coût en **Request Units** (RU/s, provisionné\nou serverless) ; les requêtes cross-partition coûtent cher. **5 niveaux de cohérence** : Strong, Bounded\nStaleness, **Session** (par défaut : read-your-writes pour un client), Consistent Prefix, Eventual.\n**Change feed** : flux ordonné (par partition) des modifications → projections, outbox, intégration.\nTransactions : seulement dans une partition logique (batch transactionnel, procédures stockées).\n\n**Piège** : une partition key \"chaude\" (date du jour, statut) → throttling (429).\n\n### Q58 ★★ — EF Core : problèmes de performance classiques ?\n**À dire** : **N+1** (lazy loading dans une boucle → `Include` ou projection), charger des entités entières\nau lieu de **projeter** (`Select` vers un DTO), oublier `AsNoTracking` en lecture, requêtes non traduites\névaluées en mémoire, absence d'index, `SaveChanges` dans une boucle. Diagnostic : logger le SQL généré,\nplan d'exécution. Concurrence : **concurrence optimiste** avec `rowversion` → `DbUpdateConcurrencyException`.\n\n### Q59 ★★ — Comment optimises-tu une requête SQL lente ?\n**À dire** : mesurer d'abord (temps, lectures logiques), lire le **plan d'exécution** (scan vs seek, key\nlookups, estimations fausses), vérifier les **index** (couvrants, ordre des colonnes, sélectivité), requêtes\nnon *sargable* (fonction sur la colonne filtrée), statistiques, parameter sniffing, réduire les colonnes et\nlignes ramenées, pagination par clé plutôt que `OFFSET` sur de gros volumes. Puis re-mesurer.\n\n---\n\n## 13. DevOps, CI/CD, Docker (`devops`)\n\n### Q60 ★★★ — Décris une pipeline CI/CD que tu mettrais en place\n**À dire** : pipeline **YAML versionnée** (Azure DevOps). **CI** à chaque PR : restore, build, tests\nunitaires et d'intégration, couverture, analyse statique (Sonar), **scan des dépendances** et des secrets,\nbuild de l'image Docker, scan de l'image ; la PR ne merge que si tout est vert + revue. **CD** : artefact\n**construit une fois**, promu d'environnement en environnement (dev → recette → préprod → prod),\ndéploiement de l'infra en **IaC** (Bicep/Terraform), **approbations** et gates sur les environnements\nsensibles, tests de fumée après déploiement, stratégie de déploiement sans interruption (slots\nApp Service, blue/green, canary), **rollback** rapide.\n\n**Lien poste** : \"you build it, you ship it\" = l'équipe possède sa pipeline.\n\n### Q61 ★★ — Stratégie de branches ?\n**À dire** : **trunk-based** avec branches courtes et PR, intégration fréquente, **feature flags** pour\nlivrer du code inactif ; GitFlow est plus lourd (branches longues, merges douloureux), justifié seulement\navec plusieurs versions maintenues en parallèle. Commits petits et atomiques, messages clairs.\n\n### Q62 ★★ — Docker : bonnes pratiques pour une image .NET ?\n**À dire** : **multi-stage build** (SDK pour compiler, image runtime `aspnet` ou *chiseled* minimale pour\nexécuter), utilisateur **non-root**, pas de secret dans l'image, tags immuables (pas `latest` en prod),\n`.dockerignore`, health checks, scan de vulnérabilités. .NET sait aussi produire une image sans Dockerfile\n(`dotnet publish /t:PublishContainer`).\n\n---\n\n## 14. DevSecOps et sécurité (`devsecops`)\n\n### Q63 ★★★ — Qu'est-ce que le DevSecOps pour toi ? Quelles failles surveilles-tu ?\n**À dire** : la sécurité **intégrée tout au long du cycle** et portée par l'équipe, pas un audit en fin de\nprojet (**shift left**) : threat modeling à la conception, revue de code, **SAST**, **SCA** (dépendances\nvulnérables, SBOM), **scan de secrets**, scan d'images, **DAST** en recette, durcissement de l'infra en IaC,\nmonitoring de sécurité en prod. Failles : **OWASP Top 10** et surtout **OWASP API Security Top 10**, dont\nla n°1 : **BOLA** (Broken Object Level Authorization : accéder à l'objet d'un autre en changeant un id),\ninjection, authentification cassée, exposition excessive de données, absence de rate limiting, SSRF.\n\n**Si on creuse** : supply chain : verrouiller les versions (lock files, Central Package Management), sources\nNuGet maîtrisées, Dependabot/Renovate, signature des artefacts.\n\n### Q64 ★★★ — Comment protèges-tu les données personnelles dans une squad KYC ?\n**À dire** : **minimisation** (ne collecter et ne propager que le nécessaire), **pas de données personnelles\ndans les logs** (masquage, identifiants techniques), chiffrement en transit et au repos (clés gérées si\nexigé), accès au **moindre privilège** et tracé, documents d'identité dans un stockage dédié avec accès\nlimité dans le temps (SAS courts, ou proxy), durées de conservation appliquées (purge), environnements\nhors prod **sans données réelles** (anonymisation/données synthétiques).\n\n---\n\n## 15. Observabilité et run (`observabilite`)\n\n### Q65 ★★★ — Logs, métriques, traces : comment instrumentes-tu un service ?\n**À dire** : les **3 piliers** : **logs structurés** (JSON, `ILogger` avec templates, niveaux maîtrisés),\n**métriques** (débit, erreurs, latence, taille des files, messages en DLQ), **traces distribuées** qui\nsuivent une requête à travers API, bus et services (propagation du contexte W3C `traceparent`, y compris\ndans les messages Service Bus). Standard : **OpenTelemetry** (le SDK .NET l'intègre via `ActivitySource` et\n`Meter`) ; Datadog sait ingérer de l'OTel ou passer par son traceur `dd-trace-dotnet`. Corrélation\nlogs ↔ traces par `trace_id`.\n\n### Q66 ★★★ — Datadog : qu'en connais-tu ? Comment l'utiliserais-tu ?\n**À dire** (même sans pratique intensive) : plateforme d'observabilité SaaS : **APM** (traces, service map,\nflame graphs), **logs** (pipelines de parsing, index, *log rehydration*), **métriques** et dashboards,\n**monitors** (seuils, anomalies) branchés sur l'astreinte, **SLO** suivis dans l'outil, intégrations Azure\n(métriques des ressources : Service Bus, App Service, Functions). Pour un service : tags unifiés\n`service`/`env`/`version` pour corréler, monitors sur les SLI (taux d'erreur, latence p95/p99, âge du\nplus vieux message, DLQ non vide).\n\n**Piège** : prétendre une maîtrise que tu n'as pas. Transposer honnêtement depuis tes outils (Grafana,\nLog Analytics / Application Insights) : *\"les concepts sont les mêmes, l'outil se prend en main vite\"*.\n\n### Q67 ★★★ — SLI, SLO, error budget ?\n**À dire** : **SLI** = mesure de la qualité vue par l'utilisateur (ex. % de demandes d'onboarding traitées\nsans erreur, latence p95 de l'API). **SLO** = objectif sur ce SLI (99,9 % sur 30 jours). **Error budget** =\nla marge d'échec permise (0,1 %) : tant qu'il reste du budget, on livre ; s'il est consommé, on priorise la\nfiabilité. Alerter sur la **consommation du budget** (burn rate) plutôt que sur chaque erreur.\n\n### Q68 ★★★ — \"You build it, you ship it, you run it\" : qu'est-ce que ça implique pour toi ?\n**À dire** : l'équipe est responsable de son service **jusqu'en production** : elle le conçoit, le livre\n(pipeline à elle) et l'exploite (monitoring, alertes, astreinte, incidents). Conséquences concrètes : on\npense **exploitabilité dès la conception** (logs, métriques, health checks, feature flags, procédures de\nrejeu de DLQ), on reçoit les alertes de son propre code, **post-mortems sans recherche de coupable** avec\nactions suivies. Bénéfice : boucle de feedback courte, qualité qui monte.\n\n### Q69 ★★★ — Un incident en production : comment réagis-tu ?\n**À dire** : 1) **qualifier l'impact** (qui, combien, depuis quand) et communiquer ; 2) **rétablir le\nservice d'abord** (rollback, feature flag, scale, bascule), la cause racine ensuite ; 3) diagnostiquer avec\nles traces/logs/métriques et la corrélation avec le dernier déploiement ; 4) une fois stabilisé :\n**post-mortem** (chronologie, cause, pourquoi ça n'a pas été détecté avant, actions). En banque : obligations\nde **déclaration des incidents majeurs** (DORA) → savoir que ce processus existe et le suivre.\n\n---\n\n## 16. Domaine bancaire et réglementaire (`banque`)\n\n### Q70 ★★★ — Explique le KYC et la LCB-FT en 1 minute\n**À dire** : **LCB-FT** = lutte contre le blanchiment et le financement du terrorisme, obligation légale\ndes établissements financiers (Code monétaire et financier, directives européennes, supervision ACPR).\nLe **KYC** en est le socle : **identifier** le client, **vérifier** son identité (pièce d'identité, selfie,\nidentité numérique), le **filtrer** contre les listes de **sanctions / gel des avoirs** et de **PPE**,\ncomprendre l'objet de la relation, puis **évaluer son risque** pour appliquer une **vigilance** simplifiée,\nstandard ou renforcée. Et c'est **continu** : mise à jour du dossier, revue périodique, surveillance des\nopérations, déclaration de soupçon à Tracfin (par la conformité). Pour une personne morale : **KYB**,\navec les **bénéficiaires effectifs**.\n\n**Contexte Xpollens** : en BaaS, les partenaires distribuent les comptes, mais l'établissement régulé reste\n**responsable** du KYC → service robuste, multi-partenaires, auditable **(à vérifier)**.\n\n### Q71 ★★★ — DSP2 et SCA : c'est quoi ? Quel impact pour une squad User & KYC ?\n**À dire** : **DSP2** (directive européenne sur les services de paiement) : ouverture des comptes aux tiers\n(agrégation, initiation de paiement via API) et **authentification forte (SCA)** : au moins **2 facteurs de\ncatégories différentes** parmi **connaissance** (mot de passe, code), **possession** (téléphone enrôlé) et\n**inhérence** (biométrie). Requise pour l'accès au compte, les paiements électroniques, les actions\nsensibles. Pour les paiements : **dynamic linking** (l'authentification est liée au montant et au\nbénéficiaire). **Exemptions** : faibles montants, bénéficiaires de confiance, analyse de risque (TRA),\npaiements récurrents. **Impact squad** : l'**enrôlement** du moyen d'authentification se fait souvent\npendant l'onboarding, et la modification de données sensibles (téléphone, e-mail, IBAN de retrait) doit\npasser par une SCA → collaboration avec l'équipe SCA (contrats d'API, événements). La fiche de poste le\nmentionne : *\"collaborer avec les autres équipes qui intègrent le SCA\"*.\n\n**À savoir citer** : DSP3 / règlement PSR en cours d'adoption **(à vérifier)**.\n\n### Q72 ★★★ — Comment les contraintes réglementaires se traduisent-elles dans le code et l'architecture ?\n**À dire** :\n- **Traçabilité / audit** : qui a fait quoi, quand, pourquoi (décision de KYC, version des règles\n  appliquées) → journal d'audit immuable, event sourcing possible.\n- **Exactitude des règles** : règles métier explicites, testées (BDD avec la conformité), versionnées.\n- **Protection des données** : RGPD, minimisation, chiffrement, logs sans données personnelles.\n- **Conservation** : 5 ans après la fin de la relation (LCB-FT), puis purge.\n- **Résilience** : DORA (tests, plans de continuité, gestion des prestataires tiers critiques, incidents).\n- **Contrôle** : séparation des rôles, validation à 4 yeux pour certaines décisions, revue de code\n  obligatoire, traçabilité des déploiements.\n\n### Q73 ★★ — DORA, RGPD : l'essentiel ?\n**À dire** : **DORA** (règlement UE, applicable depuis le **17 janvier 2025**) : résilience opérationnelle\nnumérique des acteurs financiers : gestion des risques TIC, **déclaration des incidents majeurs**, tests de\nrésilience, maîtrise des **prestataires tiers** (dont le cloud : contrats, plan de sortie, concentration).\n**RGPD** : base légale, minimisation, durée de conservation, droits des personnes (accès, rectification,\neffacement limité par les obligations légales), sécurité, privacy by design. Tension classique : RGPD\n(minimiser, effacer) vs LCB-FT (collecter, conserver) → l'obligation légale LCB-FT fonde la conservation.\n\n---\n\n## 17. Agile et collaboration (`agile`)\n\n### Q74 ★★★ — Scrum, Kanban : comment travailles-tu en équipe agile ?\n**À dire** : Scrum = sprints, rôles (PO, SM, devs), cérémonies (planning, daily, review, rétro), backlog\naffiné. Kanban = flux continu, limites de WIP, mesure du lead time. L'important pour moi : des **user\nstories petites** avec critères d'acceptation clairs (BDD), une **Definition of Done** qui inclut tests,\nrevue, déploiement et monitoring, des **rétrospectives** qui produisent des actions réelles. En tant que\nsenior : participer activement à l'affinage (questions métier, découpage, risques techniques), pas\nseulement exécuter.\n\n### Q75 ★★★ — Comment collabores-tu avec d'autres équipes (ex. l'équipe SCA) ?\n**À dire** : **contrat d'abord** : API documentées (OpenAPI), événements versionnés (published language),\ncompatibilité ascendante, dépréciation annoncée. **Tests de contrat** (consumer-driven, ex. Pact) pour\ndétecter une rupture avant la prod. Rituels de synchronisation légers, interlocuteurs identifiés,\ndépendances rendues visibles tôt dans le backlog. En DDD : clarifier la relation (customer/supplier,\nconformist, ACL).\n\n### Q76 ★★ — Tu n'es pas d'accord avec une décision technique du tech lead : que fais-tu ?\n**À dire** : j'expose mon point de vue **avec des faits** (risques, coûts, alternatives, éventuellement un\npetit spike ou une mesure), j'écoute ses contraintes que je ne connais pas forcément, et une fois la\ndécision prise je l'applique pleinement (*disagree and commit*). Si c'est structurant : la tracer dans un\n**ADR** (Architecture Decision Record) pour pouvoir la réévaluer plus tard sur des faits.\n\n---\n\n## 18. Algorithmique et robustesse (`algo`)\n\n### Q77 ★★ — Complexité des collections .NET : List, Dictionary, HashSet ?\n**À dire** : `List<T>` : accès par index O(1), recherche `Contains` O(n), ajout en fin O(1) amorti, insertion\nau milieu O(n). `Dictionary<TKey,TValue>` / `HashSet<T>` : recherche, ajout, suppression **O(1) en moyenne**\n(table de hachage), O(n) au pire si mauvais hash. `SortedDictionary` : O(log n). Réflexe : remplacer un\n`list.Contains` dans une boucle (O(n²)) par un `HashSet` (O(n)).\n\n**Si on creuse** : un objet utilisé comme clé doit avoir `Equals` et `GetHashCode` cohérents et **stables**\n(clé immuable) ; les records le font automatiquement.\n\n### Q78 ★★ — Qu'est-ce qu'un code \"robuste\" pour toi ?\n**À dire** : il **valide ses entrées** aux frontières (et rend les états invalides impossibles dans le\ndomaine : Value Objects), gère explicitement les cas limites (vide, null, doublons, bornes, fuseaux\nhoraires, arrondis), **échoue proprement** (erreurs claires, pas d'état à moitié écrit), est idempotent face\naux rejeux, tolère les pannes de ses dépendances (timeouts, retry, circuit breaker), est **observable** et\ncouvert par des tests sur ces cas limites.\n\n---\n\n## 19. IA pour le développement (`ia`) — le tech lead y croit beaucoup\n\n### Q79 ★★★ — Utilises-tu des agents de code ? Comment, au quotidien ?\n**À dire** (structure) : oui, tous les jours, **avec méthode** : contexte du projet dans un fichier versionné\n(`AGENTS.md` : commandes, conventions, architecture, interdits), **plan validé** avant modification,\n**tests comme filet** (idéalement écrits ou validés par moi d'abord), **petits diffs**, **revue humaine** de\ntout ce qui est mergé : je reste l'auteur responsable. Exemple concret vécu (voir document personnel de\npositionnement IA).\n\n**Message clé** : *l'IA amplifie l'ingénierie (tests, CI, petits incréments), elle ne la remplace pas.*\n\n### Q80 ★★★ — Quels risques de l'IA dans une banque ? À quelles conditions l'utiliser ?\n**À dire** : **données** (code et données envoyés à un fournisseur : outils approuvés, contrats, pas de\ndonnées client, options de non-rétention), **sécurité** (prompt injection indirecte via un fichier ou une\npage lue par l'agent, exécution de commandes, exfiltration ; hallucination de paquets → supply chain),\n**qualité** (code plausible mais faux, tests qui valident le bug), **conformité** (DORA : l'outil IA est un\nprestataire tiers ; AI Act). Conditions : outils validés par la sécurité, permissions minimales, sandbox,\nrevue obligatoire, CI inchangée en exigence, traçabilité.\n\n### Q81 ★★★ — Qu'est-ce que tu ne délègues jamais à un agent ?\n**À dire** : la **décision** (architecture, arbitrages), la **compréhension** du code que je merge, la\nvalidation des règles métier et réglementaires, tout ce qui touche aux secrets et à la prod sans\ncontrôle. Je délègue l'exécution encadrée : boilerplate, tests à partir de cas que j'ai définis,\nexploration d'un code inconnu, migrations mécaniques, première relecture.\n\n### Q82 ★★ — C'est quoi MCP ?\n**À dire** : **Model Context Protocol**, standard ouvert (Anthropic, adopté largement) pour connecter un\nagent/LLM à des **outils et sources de données** via des serveurs MCP (fichiers, base, tickets, API\ninterne). Avantage : une intégration réutilisable par tous les clients compatibles. Risques : un serveur\nMCP est du code tiers qui reçoit des données et peut agir → serveurs approuvés, permissions minimales,\nattention à la prompt injection dans les données renvoyées. SDK C# officiel disponible.\n\n### Q83 ★★ — L'IA est interdite pendant le kata : qu'en penses-tu ?\n**À dire** : *\"C'est logique : vous voulez voir comment je raisonne, teste et refactore moi-même ; c'est\njustement ce qui me permet de juger ce que produit un agent.\"* Puis, si on te demande comment tu l'aurais\nfait avec un agent : golden master généré et relu, couverture et mutation vérifiées, refactoring en petits\npas, un commit par pas.\n\n---\n\n## 20. Mises en situation (`archi`) — conception à l'oral ou au tableau\n\n### Q84 ★★★ — Conçois le service d'onboarding KYC (mise en situation)\n**Méthode** (à dire avant de dessiner) : *\"Je commence par clarifier le besoin et les contraintes, puis je\npropose un découpage, les flux, les données, et je finis par la résilience, la sécurité et l'observabilité.\"*\n1. **Questions** : volumes (dossiers/jour, pics de campagnes partenaires), personnes physiques et/ou\n   morales, fournisseurs de vérification/screening, délais attendus, multi-partenaires, existant.\n2. **Contextes** : Onboarding (orchestration, machine à états du `KycCase`), Vérification d'identité (ACL\n   vers le fournisseur), Screening, Risque, Profil client (Q31).\n3. **Flux** : `POST /onboarding-cases` (avec `Idempotency-Key`) → `202 Accepted` + id ; documents déposés\n   en Blob Storage (SAS court) → Event Grid → analyse ; étapes asynchrones via **Service Bus** ; orchestration\n   par machine à états (ou Durable Functions) avec timeouts et relances ; résultat publié\n   (`CustomerOnboarded` / `OnboardingRejected`) vers les autres équipes (dont SCA pour l'enrôlement).\n4. **Données** : `KycCase` en event sourcing (audit natif) ou état + journal d'audit ; projections pour les\n   back-offices conformité ; documents chiffrés, durée de conservation.\n5. **Fiabilité** : outbox, consommateurs idempotents, DLQ surveillées, retry/circuit breaker vers les\n   fournisseurs, reprise manuelle possible (revue par un analyste conformité).\n6. **Sécurité** : OAuth2 (partenaire = client credentials, utilisateur = auth code + PKCE), BOLA (cloisonnement\n   par partenaire/tenant), Managed Identity, private endpoints, pas de PII dans les logs.\n7. **Observabilité** : traces de bout en bout par dossier, métriques métier (taux d'acceptation, durée\n   moyenne, dossiers bloqués), SLO.\n\n**Piège** : dessiner des boîtes Azure pendant 10 minutes sans avoir posé de question ni parlé du métier.\n\n### Q85 ★★★ — Un consommateur Service Bus traite parfois un message deux fois. Pourquoi ? Que fais-tu ?\n**À dire** : normal en **at-least-once** : lock expiré pendant un traitement long (le message réapparaît),\ncrash après traitement et avant `Complete`, retry de l'émetteur. Solutions : **idempotence** (table des\nmessages traités avec contrainte unique, dans la même transaction que l'effet métier = inbox), renouvellement\nde lock, traitement plus court ; duplicate detection côté envoi ; vérifier que l'effet métier est lui-même\nidempotent.\n\n### Q86 ★★ — La latence de l'API a doublé depuis le dernier déploiement. Comment investigues-tu ?\n**À dire** : corréler avec le déploiement (version tag dans l'APM), comparer les traces avant/après pour\ntrouver le segment lent (base, appel externe, CPU), vérifier les métriques infra (CPU, mémoire, GC, pool\nde connexions, thread pool starvation dû à du sync-over-async), le SQL généré (nouvelle requête N+1,\nindex manquant). Rollback si l'impact est fort, puis analyse à froid. Ajouter un test/monitor pour que ça\nne se reproduise pas sans alerte.\n\n---\n\n## Questions de fin : à poser à l'équipe (montre ta maturité)\n\nChoisir 3 ou 4 selon le déroulé :\n- Comment est découpé le domaine User & KYC aujourd'hui ? Quels bounded contexts, quels échanges avec la\n  squad SCA ?\n- Où en est la migration vers Azure ? Quelle part de .NET Framework reste-t-il ? Functions, App Service,\n  conteneurs ?\n- L'Event Sourcing est-il en production ? Sur quels agrégats, avec quel event store ?\n- Comment fonctionne le run : astreinte, gestion des incidents, SLO suivis dans Datadog ?\n- Quelle est votre pratique des tests et de la revue de code ? Du BDD avec la conformité ?\n- Quels outils d'IA sont autorisés dans l'équipe, et qu'est-ce qui marche ou coince ?\n- Qu'est-ce qui ferait de quelqu'un un très bon renfort dans l'équipe dans 3 mois ?\n\n## Pour aller plus loin\nChaque section renvoie à sa fiche thématique (01 à 19). Après cette fiche : quiz sur les thèmes ★★★, puis\n`03-cv-entretien/questions-cv.md` pour les questions sur ton parcours.\n"
  }
 });
+
+  </script>
+  <script>
+// Généré par tools/build.mjs à partir de 01-fiches/00-essentiel-poste.md — ne pas modifier à la main.
+QUIZ.register([
+ {
+  "id": "essentiel-q01",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": ".NET Framework vs .NET : quelles différences ? Comment migrer une application .NET Framework ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q1---net-framework-vs-net--quelles-différences--comment-migrer-une-application-net-framework-",
+  "explanation": "**À dire** : .NET Framework (4.8.x) est Windows-only, intégré à Windows, en maintenance (correctifs de\nsécurité, plus de nouveautés). .NET (ex-Core, aujourd'hui .NET 8/9/10) est cross-platform, open source,\nbeaucoup plus performant, conteneurisable, avec un cycle annuel (LTS les années paires, 3 ans de support).\nPour migrer : inventaire et analyse (dépendances, API Windows-only), d'abord les bibliothèques en\n**.NET Standard 2.0** ou multi-target, puis les applications, **par incréments** (strangler fig, YARP en\nfaçade pour basculer route par route), avec des tests de caractérisation avant de toucher.\n\n**Si on creuse** : ce qui n'existe plus : `System.Web` (HttpContext, modules/handlers → middlewares),\nWCF serveur (→ CoreWCF ou gRPC/REST), AppDomains, .NET Remoting, `web.config` (→ `appsettings.json` +\noptions), EF6 (→ EF Core, ou EF6 qui tourne aussi sur .NET). Outils : .NET Upgrade Assistant, analyseurs\nde portabilité. **Versions** : .NET 10 LTS (nov. 2025) ; .NET 8 LTS et .NET 9 STS en fin de support le\n10 nov. 2026 ; .NET 11 STS attendu nov. 2026 **(à vérifier)**.\n\n**Piège** : proposer un big bang. Dire \"on réécrit tout\" en banque = risque maximal.\n\n→ [02-csharp](02-csharp.md), [07-refacto](07-refacto.md)"
+ },
+ {
+  "id": "essentiel-q02",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "class, struct, record : quelles différences ? Type valeur vs type référence ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q2---class-struct-record--quelles-différences--type-valeur-vs-type-référence-",
+  "explanation": "**À dire** : `class` = type référence, alloué sur le tas, égalité par référence. `struct` = type valeur,\ncopié à l'affectation, pas d'héritage, adapté aux petites données immuables. `record` (class ou struct)\n= égalité **par valeur**, `ToString` lisible, `with` pour copier en modifiant, idéal pour **Value Objects**,\nDTO, messages et événements.\n\n**Si on creuse** : \"struct = pile\" est un raccourci faux (un struct champ d'une classe vit sur le tas).\nBoxing quand un struct passe en `object`/interface. `readonly struct`, `record struct`. Un record peut\nquand même être muable (`set`) : préférer `init`.\n\n**Piège** : record avec une collection → l'égalité compare la référence de la liste, pas son contenu."
+ },
+ {
+  "id": "essentiel-q03",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment fonctionne async/await ? Quels pièges ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q3---comment-fonctionne-asyncawait--quels-pièges-",
+  "explanation": "**À dire** : `async/await` libère le thread pendant une **attente d'I/O** : le compilateur transforme la\nméthode en machine à états, la suite s'exécute à la fin de la tâche. Gain = **scalabilité** (moins de\nthreads bloqués), pas vitesse d'un appel. Pour du CPU, c'est `Task.Run`/parallélisme, autre sujet.\n\n**Pièges** : `.Result`/`.Wait()` (blocage, deadlock avec un contexte de synchronisation, thread pool\nstarvation) ; `async void` (exceptions non capturables, sauf handlers d'événements) ; oublier le\n`CancellationToken` ; `Task.WhenAll` pour paralléliser des I/O indépendantes ; `ConfigureAwait(false)` utile\nen bibliothèque, inutile en ASP.NET Core (pas de SynchronizationContext).\n\n**Si on creuse** : `ValueTask` pour les chemins souvent synchrones (cache), à n'awaiter qu'une fois ;\n`IAsyncEnumerable` pour streamer ; `SemaphoreSlim` (pas `lock`) pour protéger une section async."
+ },
+ {
+  "id": "essentiel-q04",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "IEnumerable vs IQueryable vs List ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q4---ienumerable-vs-iqueryable-vs-list-",
+  "explanation": "**À dire** : `IEnumerable<T>` = itération en mémoire, exécution **différée** (LINQ to Objects).\n`IQueryable<T>` = arbre d'expression traduit par un provider (EF Core → SQL) : le filtre s'exécute en base.\n`List<T>` = collection matérialisée. Exposer `IQueryable` hors de la couche data = fuite d'abstraction.\n\n**Piège** : énumération multiple d'un `IEnumerable` (requête rejouée) ; `AsEnumerable()` trop tôt → tout\nrapatrier en mémoire puis filtrer."
+ },
+ {
+  "id": "essentiel-q05",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment fonctionne le Garbage Collector ? IDisposable ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q5---comment-fonctionne-le-garbage-collector--idisposable-",
+  "explanation": "**À dire** : GC générationnel (gen 0/1/2, + LOH pour les objets ≥ 85 Ko), libère la mémoire **managée**.\nLes ressources **non managées** (connexions, fichiers, sockets) se libèrent avec `IDisposable` + `using` ;\nle finaliseur n'est qu'un filet de sécurité. `IAsyncDisposable` + `await using` pour les libérations async.\n\n**Piège** : `new HttpClient()` dans un `using` à chaque appel → épuisement des sockets ; utiliser\n`IHttpClientFactory`."
+ },
+ {
+  "id": "essentiel-q06",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Quelles durées de vie en injection de dépendances ? Quel piège ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q6---quelles-durées-de-vie-en-injection-de-dépendances--quel-piège-",
+  "explanation": "**À dire** : **Transient** (nouvelle instance à chaque résolution), **Scoped** (une par requête HTTP / par\nscope), **Singleton** (une pour toute l'application, doit être thread-safe). `DbContext` est scoped.\n\n**Piège** : la **captive dependency** : un singleton qui reçoit un scoped (ex. `DbContext`) le garde à vie →\nbugs de concurrence et données périmées. ASP.NET Core le détecte en dev (`ValidateScopes`). Dans un\n`BackgroundService` (singleton), créer un scope via `IServiceScopeFactory` par message traité."
+ },
+ {
+  "id": "essentiel-q07",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Pourquoi `decimal` et pas `double` pour des montants ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q7---pourquoi-decimal-et-pas-double-pour-des-montants-",
+  "explanation": "**À dire** : `double` est binaire flottant : 0,1 n'est pas représentable exactement → erreurs d'arrondi\ncumulées. `decimal` est en base 10 (28–29 chiffres significatifs), exact pour les montants. En banque :\n`decimal` + règle d'arrondi explicite (`MidpointRounding.ToEven` \"bancaire\" ou `AwayFromZero` selon la règle\nmétier) + **Value Object `Money`** (montant + devise, interdiction d'additionner deux devises).\n\n**Si on creuse** : stocker en base en `decimal(19,4)` ou en centimes entiers ; ISO 4217 pour les devises."
+ },
+ {
+  "id": "essentiel-q08",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Exceptions ou Result pattern ? `throw` vs `throw ex` ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q8---exceptions-ou-result-pattern--throw-vs-throw-ex-",
+  "explanation": "**À dire** : exception pour l'**exceptionnel** (panne, bug, invariant violé) ; résultat typé (`Result<T>`,\nunion de cas) pour les **échecs métier attendus** (KYC refusé, document illisible) qui font partie du flux.\n`throw;` conserve la stack trace, `throw ex;` la réinitialise. Ne jamais avaler une exception sans log.\nCôté API : un middleware global qui traduit en `ProblemDetails`."
+ },
+ {
+  "id": "essentiel-q09",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Qu'apportent les nullable reference types ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q9---quapportent-les-nullable-reference-types-",
+  "explanation": "**À dire** : analyse statique qui distingue `string` (non null) de `string?`. Les NullReferenceException\ndeviennent des warnings à la compilation. Sur un legacy : activer fichier par fichier (`#nullable enable`),\npasser les warnings en erreurs sur le nouveau code. Ce n'est pas une garantie runtime (désérialisation,\n`!` abusif)."
+ },
+ {
+  "id": "essentiel-q10",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Quelles nouveautés récentes de C# utilises-tu ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q10---quelles-nouveautés-récentes-de-c-utilises-tu-",
+  "explanation": "**À dire** (citer 4–5 que tu emploies vraiment) : records et `init` ; pattern matching (`switch` expressions,\npatterns de propriétés, de liste) ; `required` ; primary constructors (C# 12) ; collection expressions\n`[..]` ; file-scoped namespaces ; raw string literals. C# 14 (.NET 10) : mot-clé `field` dans les\npropriétés, **extension members** (blocs `extension`), affectation null-conditionnelle `a?.B = x`\n**(à vérifier si on te pousse dans le détail)**.\n\n**Piège** : citer une feature sans savoir l'expliquer. Mieux vaut 3 features maîtrisées."
+ },
+ {
+  "id": "essentiel-q11",
+  "theme": "csharp",
+  "track": "essentiel",
+  "section": "C# et runtime .NET",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment rendre du code thread-safe ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q11---comment-rendre-du-code-thread-safe-",
+  "explanation": "**À dire** : d'abord **éviter l'état partagé** (immutabilité, données par requête). Sinon : `lock` (sections\ncourtes, synchrones), `Interlocked` (compteurs), collections `Concurrent*` (`ConcurrentDictionary`,\n`Channel<T>` pour producteur/consommateur), `SemaphoreSlim` pour l'async. Attention : en multi-instances\n(scale-out Azure), un `lock` ne protège rien entre instances → concurrence optimiste en base, lease de\nblob, sessions Service Bus.\n\n**Piège** : `ConcurrentDictionary.GetOrAdd` peut exécuter la factory plusieurs fois (`Lazy<T>` pour l'éviter).\n\n---"
+ },
+ {
+  "id": "essentiel-q12",
+  "theme": "aspnet-api",
+  "track": "essentiel",
+  "section": "API REST et ASP.NET Core",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment conçois-tu une API REST propre ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q12---comment-conçois-tu-une-api-rest-propre-",
+  "explanation": "**À dire** : ressources au pluriel (`/customers/{id}/documents`), verbes HTTP sémantiques, codes adaptés\n(`200`, `201` + `Location`, `202` pour un traitement asynchrone, `204`, `400` validation, `401` non\nauthentifié, `403` non autorisé, `404`, `409` conflit/version, `422`, `429`), erreurs au format\n**ProblemDetails** (RFC 9457), pagination, versioning (URL ou header), contrat **OpenAPI**.\n**Idempotence** : GET/PUT/DELETE le sont par définition ; pour un POST sensible (création de dossier,\npaiement), header **`Idempotency-Key`** stocké côté serveur.\n\n**Si on creuse** : traitement long (vérification d'identité) → `202 Accepted` + ressource de statut ou\nwebhook/événement. Concurrence : `ETag` + `If-Match` → `412`."
+ },
+ {
+  "id": "essentiel-q13",
+  "theme": "aspnet-api",
+  "track": "essentiel",
+  "section": "API REST et ASP.NET Core",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "OAuth2 / OpenID Connect : comment ça marche ? Quel flow pour quel cas ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q13---oauth2--openid-connect--comment-ça-marche--quel-flow-pour-quel-cas-",
+  "explanation": "**À dire** : OAuth2 = **délégation d'autorisation** (access token) ; OIDC = couche d'**authentification**\nau-dessus (ID token, identité de l'utilisateur). Flows : **Authorization Code + PKCE** pour un utilisateur\n(web, mobile, SPA) ; **Client Credentials** pour du service à service ; Implicit et Password sont\ndépréciés. L'API valide le JWT : signature (clés JWKS), `iss`, `aud`, expiration, puis autorise via\nscopes/rôles/**policies**.\n\n**Si on creuse** : authentification ≠ autorisation ; dans Azure, **Entra ID** + **Managed Identity** pour\nle service à service sans secret ; tokens courts + refresh tokens ; ne jamais logguer un token.\n\n**Piège** : vérifier les droits sur la ressource elle-même (BOLA : le client X ne doit pas lire le dossier\ndu client Y même avec un token valide). Voir Q63."
+ },
+ {
+  "id": "essentiel-q14",
+  "theme": "aspnet-api",
+  "track": "essentiel",
+  "section": "API REST et ASP.NET Core",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Middleware vs filtre ? Comment rendre un appel HTTP sortant résilient ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q14---middleware-vs-filtre--comment-rendre-un-appel-http-sortant-résilient-",
+  "explanation": "**À dire** : le **middleware** agit sur tout le pipeline (auth, logs, gestion d'erreurs, ordre important) ;\nle **filtre** agit dans MVC autour des actions (validation, autorisation fine). Appels sortants :\n`IHttpClientFactory` + **résilience** (`Microsoft.Extensions.Http.Resilience` / Polly v8) : **timeout**,\n**retry avec backoff exponentiel + jitter** (seulement sur erreurs transitoires et opérations\nidempotentes), **circuit breaker**, éventuellement bulkhead.\n\n**Piège** : retry sur un POST non idempotent → double création.\n\n---"
+ },
+ {
+  "id": "essentiel-q15",
+  "theme": "clean-code",
+  "track": "essentiel",
+  "section": "Clean Code, SOLID, design patterns",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Explique SOLID avec un exemple pour chaque principe",
+  "ref": "01-fiches/00-essentiel-poste.md#q15---explique-solid-avec-un-exemple-pour-chaque-principe",
+  "explanation": "**À dire** :\n- **S** — une classe, une raison de changer : le calcul de risque KYC ne fait pas aussi l'envoi d'e-mail.\n- **O** — ouvert à l'extension, fermé à la modification : ajouter une règle de vigilance = ajouter une\n  classe `IRiskRule`, pas modifier un `switch` géant.\n- **L** — un sous-type doit pouvoir remplacer son parent sans surprise (pas de `NotImplementedException`\n  dans une méthode héritée).\n- **I** — interfaces petites et ciblées : `IDocumentReader` plutôt qu'un `IDocumentService` à 15 méthodes.\n- **D** — le domaine dépend d'abstractions (`IIdentityVerifier`), l'infrastructure les implémente (adaptateur\n  du fournisseur). C'est la base de l'hexagonal.\n\n**Piège** : réciter les définitions sans exemple, ou appliquer SOLID de façon dogmatique (une interface\npar classe \"au cas où\")."
+ },
+ {
+  "id": "essentiel-q16",
+  "theme": "clean-code",
+  "track": "essentiel",
+  "section": "Clean Code, SOLID, design patterns",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Quels design patterns utilises-tu vraiment ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q16---quels-design-patterns-utilises-tu-vraiment-",
+  "explanation": "**À dire** (patterns + cas d'usage) : **Strategy** (règles de calcul interchangeables), **Factory**\n(choisir la stratégie selon le type de client), **Decorator** (ajouter cache, retry, logs autour d'un\nservice sans le modifier), **Adapter** (encapsuler un fournisseur externe de vérification d'identité),\n**Specification** (règles métier combinables), **State** (cycle de vie d'un dossier KYC), Repository,\nObserver/événements de domaine.\n\n**Si on creuse** : ne pas introduire un pattern sans douleur réelle (YAGNI) ; un `switch` de 3 cas lisible\nvaut mieux qu'une hiérarchie de 6 classes."
+ },
+ {
+  "id": "essentiel-q17",
+  "theme": "clean-code",
+  "track": "essentiel",
+  "section": "Clean Code, SOLID, design patterns",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Qu'est-ce que du code propre pour toi ? Quels code smells repères-tu ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q17---quest-ce-que-du-code-propre-pour-toi--quels-code-smells-repères-tu-",
+  "explanation": "**À dire** : du code qui **dit ce qu'il fait** dans le langage du métier, facile à changer, couvert par des\ntests qui documentent le comportement. Smells : méthodes longues, conditionnels imbriqués, duplication,\n**primitive obsession** (un `string` pour un IBAN), feature envy, noms vagues (`Manager`, `Helper`, `data`),\ncommentaires qui compensent un mauvais nommage, classes \"Dieu\", effets de bord cachés.\n\n**Si on creuse** : Clean Code n'est pas un dogme (méthodes de 3 lignes partout = fragmentation) ; la\nlisibilité se juge en équipe, en revue."
+ },
+ {
+  "id": "essentiel-q18",
+  "theme": "clean-code",
+  "track": "essentiel",
+  "section": "Clean Code, SOLID, design patterns",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Composition ou héritage ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q18---composition-ou-héritage-",
+  "explanation": "**À dire** : préférer la **composition** : couplage plus faible, comportements combinables, testable.\nL'héritage pour une vraie relation \"est un\" stable, peu profonde. Héritage pour factoriser du code = piège\nclassique (classes de base fourre-tout).\n\n---"
+ },
+ {
+  "id": "essentiel-q19",
+  "theme": "tests",
+  "track": "essentiel",
+  "section": "Tests, TDD, BDD",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "C'est quoi le TDD pour toi ? Le pratiques-tu vraiment ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q19---cest-quoi-le-tdd-pour-toi--le-pratiques-tu-vraiment-",
+  "explanation": "**À dire** : cycle **Red → Green → Refactor** en très petits pas : un test qui échoue, le code minimal pour\nle faire passer, puis on nettoie, tests au vert. C'est d'abord un **outil de design** (on conçoit l'API du\npoint de vue de l'appelant) et un filet de sécurité pour refactorer. Bénéfices : moins de code inutile,\ntests qui documentent, feedback rapide.\n\n**Si on creuse** : je l'applique surtout sur la logique métier (règles, calculs, machines à états) ; moins\npertinent pour du code d'intégration pur ou une exploration (spike puis on jette). Être honnête sur ta\npratique réelle, avec un exemple.\n\n**Piège** : dire \"je fais du TDD à 100 %\" puis écrire le code avant le test pendant le kata. Ils\nregarderont."
+ },
+ {
+  "id": "essentiel-q20",
+  "theme": "tests",
+  "track": "essentiel",
+  "section": "Tests, TDD, BDD",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Pyramide des tests ? Qu'est-ce qu'un bon test unitaire ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q20---pyramide-des-tests--quest-ce-quun-bon-test-unitaire-",
+  "explanation": "**À dire** : beaucoup de tests unitaires rapides, moins de tests d'intégration, peu de tests end-to-end.\nBon test : **FIRST** (Fast, Isolated, Repeatable, Self-validating, Timely), structure\n**Arrange/Act/Assert**, un comportement par test, nom qui décrit la règle\n(`Should_require_enhanced_due_diligence_when_customer_is_PEP`), teste le **comportement** pas\nl'implémentation.\n\n**Si on creuse** : \"unitaire\" = unité de **comportement**, pas forcément une classe (école de Chicago vs\nLondres). Tests d'API : `WebApplicationFactory` ; base réelle : **Testcontainers** (SQL Server, Cosmos\nemulator, Service Bus emulator **(à vérifier)**)."
+ },
+ {
+  "id": "essentiel-q21",
+  "theme": "tests",
+  "track": "essentiel",
+  "section": "Tests, TDD, BDD",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Mock, stub, fake : quelle différence ? Quand mocker ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q21---mock-stub-fake--quelle-différence--quand-mocker-",
+  "explanation": "**À dire** : **stub** = renvoie des réponses préparées (contrôle les entrées indirectes) ; **mock** = vérifie\nles interactions (on asserte qu'un appel a eu lieu) ; **fake** = implémentation simplifiée qui fonctionne\n(repository en mémoire). Mocker les **frontières** (fournisseur externe, horloge, bus), pas le domaine.\n\n**Piège** : le sur-mocking : des tests qui reproduisent l'implémentation, cassent à chaque refactoring et\nne détectent aucun bug (\"tester les mocks\"). Injecter `TimeProvider` plutôt que `DateTime.Now`."
+ },
+ {
+  "id": "essentiel-q22",
+  "theme": "tests",
+  "track": "essentiel",
+  "section": "Tests, TDD, BDD",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "BDD : c'est quoi ? Gherkin ? Différence avec TDD ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q22---bdd--cest-quoi--gherkin--différence-avec-tdd-",
+  "explanation": "**À dire** : BDD = **collaboration** métier / dev / QA autour d'exemples concrets (ateliers \"three amigos\",\nexample mapping), formalisés en **Given / When / Then**. Les scénarios deviennent des tests exécutables\n(Reqnroll, successeur de SpecFlow arrêté fin 2024) et une documentation vivante. TDD = discipline du\ndéveloppeur au niveau du code ; BDD = alignement sur le comportement attendu au niveau du besoin. Ils se\ncomplètent.\n\n**Exemple KYC** : *Given un client majeur résidant en France, When il est identifié comme PPE, Then le\ndossier passe en vigilance renforcée.*\n\n**Piège** : du Gherkin écrit seul par les devs, très technique : on a le coût du BDD sans le bénéfice."
+ },
+ {
+  "id": "essentiel-q23",
+  "theme": "tests",
+  "track": "essentiel",
+  "section": "Tests, TDD, BDD",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Couverture de code : quel objectif ? Mutation testing ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q23---couverture-de-code--quel-objectif--mutation-testing-",
+  "explanation": "**À dire** : la couverture dit ce qui **n'est pas** testé, pas ce qui est bien testé (100 % sans assertion\nest possible). Le **mutation testing** (Stryker.NET) modifie le code (`>` → `>=`, suppression d'appel) et\nvérifie que les tests échouent : mesure la qualité des assertions. Utile sur le code métier critique.\n\n---"
+ },
+ {
+  "id": "essentiel-q24",
+  "theme": "refacto",
+  "track": "essentiel",
+  "section": "Refactoring et legacy",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment abordes-tu un code legacy sans tests ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q24---comment-abordes-tu-un-code-legacy-sans-tests-",
+  "explanation": "**À dire** (méthode de Feathers) : 1) identifier la zone à changer ; 2) trouver les **points de test**\n(seams) ; 3) casser les dépendances au minimum et en sécurité (extraire une interface, paramètre,\nméthode virtuelle) ; 4) poser des **tests de caractérisation** / golden master qui figent le comportement\n**actuel**, bugs compris ; 5) refactorer en petits pas, tests au vert, commit à chaque pas ; 6) seulement\nensuite, changer le comportement en TDD.\n\n**Si on creuse** : outils : approval tests (Verify), couverture pour vérifier que les branches sont\nexercées, mutation testing pour vérifier le filet. Refactorings automatisés de l'IDE (sûrs) plutôt\nqu'à la main.\n\n**Piège** : corriger un bug découvert pendant le refactoring sans le signaler : un \"bug\" peut être un\ncomportement dont un client dépend. On le note, on en parle au PO."
+ },
+ {
+  "id": "essentiel-q25",
+  "theme": "refacto",
+  "track": "essentiel",
+  "section": "Refactoring et legacy",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Refactoring ou réécriture ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q25---refactoring-ou-réécriture-",
+  "explanation": "**À dire** : réécriture totale = risque élevé (règles implicites perdues, double maintenance, effet tunnel).\nPréférer le **refactoring incrémental** et, à l'échelle d'un système, le **strangler fig** : une façade\nroute progressivement vers le nouveau code, fonctionnalité par fonctionnalité, avec une **anti-corruption\nlayer** entre ancien et nouveau modèle. On réécrit un module quand il est petit, bien délimité et que\nses comportements sont capturés par des tests."
+ },
+ {
+  "id": "essentiel-q26",
+  "theme": "refacto",
+  "track": "essentiel",
+  "section": "Refactoring et legacy",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Que regardes-tu dans une revue de code ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q26---que-regardes-tu-dans-une-revue-de-code-",
+  "explanation": "**À dire** (du plus important au moins important) : 1) **correction** : le code fait-il ce que demande le\nticket, cas limites, concurrence, erreurs ; 2) **sécurité** : données sensibles, autorisation, injection,\nsecrets, logs ; 3) **tests** : présents, pertinents, testent le comportement ; 4) **design** : responsabilités,\ncouplage, cohérence avec l'architecture ; 5) lisibilité et nommage ; 6) style (que l'outillage devrait\ndéjà gérer). Ton : questions plutôt qu'ordres, distinguer bloquant / suggestion.\n\n→ [07-refacto, section revue de code](07-refacto.md#revue-de-code-existant)\n\n---"
+ },
+ {
+  "id": "essentiel-q27",
+  "theme": "ddd",
+  "track": "essentiel",
+  "section": "Domain Driven Design",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "C'est quoi le DDD ? Stratégique vs tactique ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q27---cest-quoi-le-ddd--stratégique-vs-tactique-",
+  "explanation": "**À dire** : approche qui place le **modèle du domaine métier** au centre, construit avec les experts.\n**Stratégique** (le plus important) : langage omniprésent (**ubiquitous language**), découpage en\n**bounded contexts**, relations entre contextes (**context map**), distinction core / supporting / generic\nsubdomain pour savoir où investir. **Tactique** : briques de code : entités, value objects, agrégats,\ndomain events, repositories, domain services, factories.\n\n**Si on creuse** : le DDD vaut pour un domaine **complexe** et changeant (le KYC l'est : règles\nréglementaires, risques, cas particuliers) ; pour du CRUD simple, c'est du sur-design.\n\n**Piège** : réduire le DDD aux patterns tactiques (\"on a des repositories donc on fait du DDD\")."
+ },
+ {
+  "id": "essentiel-q28",
+  "theme": "ddd",
+  "track": "essentiel",
+  "section": "Domain Driven Design",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Bounded context, ubiquitous language, context map : explique",
+  "ref": "01-fiches/00-essentiel-poste.md#q28---bounded-context-ubiquitous-language-context-map--explique",
+  "explanation": "**À dire** : un **bounded context** est une frontière dans laquelle un modèle et un vocabulaire ont un sens\nunique. Exemple : \"Client\" n'a pas le même sens dans l'onboarding (un prospect avec des pièces à vérifier)\net dans la facturation (un payeur). Le **langage omniprésent** est utilisé dans les conversations, le code,\nles tests. La **context map** décrit les relations : customer/supplier, conformist, **anti-corruption layer**\n(on traduit le modèle d'un système externe ou legacy pour ne pas polluer le nôtre), shared kernel,\nopen host service / published language.\n\n**Si on creuse** : un bounded context est souvent un bon candidat de microservice, mais pas obligatoirement\n(un monolithe modulaire peut contenir plusieurs contextes)."
+ },
+ {
+  "id": "essentiel-q29",
+  "theme": "ddd",
+  "track": "essentiel",
+  "section": "Domain Driven Design",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Entité, Value Object, Agrégat : règles d'un agrégat ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q29---entité-value-object-agrégat--règles-dun-agrégat-",
+  "explanation": "**À dire** : **entité** = identité stable dans le temps (un client, un dossier KYC). **Value Object** =\ndéfini par ses valeurs, immuable, auto-validant (`Iban`, `Money`, `Address`, `DateOfBirth`) : élimine la\nprimitive obsession. **Agrégat** = grappe d'objets cohérente avec une **racine** seule point d'entrée, qui\ngarantit les **invariants**. Règles : une transaction modifie **un seul agrégat** ; on référence les autres\nagrégats **par identifiant** ; agrégats **petits** ; cohérence entre agrégats **éventuelle**, via\ndomain events.\n\n**Exemple** : `KycCase` (racine) contient ses `Documents` et son statut ; invariant : impossible de valider\nle dossier si un document obligatoire n'est pas vérifié ou si le screening n'est pas fait."
+ },
+ {
+  "id": "essentiel-q30",
+  "theme": "ddd",
+  "track": "essentiel",
+  "section": "Domain Driven Design",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Domain event vs integration event ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q30---domain-event-vs-integration-event-",
+  "explanation": "**À dire** : **domain event** = fait métier passé, interne au bounded context (`DocumentVerified`), traité\nsouvent dans le même processus. **Integration event** = contrat **public** publié vers d'autres contextes\n(`CustomerOnboarded` sur Service Bus) : versionné, stable, contenu minimal et sans fuite du modèle interne.\nNom au passé, immuable."
+ },
+ {
+  "id": "essentiel-q31",
+  "theme": "ddd",
+  "track": "essentiel",
+  "section": "Domain Driven Design",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment découperais-tu le domaine User & KYC ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q31---comment-découperais-tu-le-domaine-user--kyc-",
+  "explanation": "**À dire** (proposition, à confronter à leur réalité) :\n- **Onboarding / Entrée en relation** : parcours, collecte des informations, orchestration (core).\n- **Vérification d'identité** : documents, selfie/liveness, souvent via fournisseur externe → **ACL**.\n- **Screening** : sanctions, gel des avoirs, PPE (souvent fournisseur externe).\n- **Évaluation du risque** : scoring, niveau de vigilance (core, règles métier riches).\n- **Profil client / référentiel** : données à jour, revue périodique (KYC refresh).\n- **Authentification / SCA** : autre équipe → relation customer/supplier ou conformist.\nLes contextes communiquent par événements (`IdentityVerified`, `ScreeningCompleted`, `RiskAssessed`) ;\nle dossier `KycCase` a un cycle de vie (machine à états) : `Draft → Submitted → UnderReview →\nApproved / Rejected / PendingInformation`.\n\n**Bonne attitude** : finir par une question : *\"comment est-ce découpé chez vous aujourd'hui ?\"*\n\n→ [18-banque, modèle d'onboarding](18-banque.md)"
+ },
+ {
+  "id": "essentiel-q32",
+  "theme": "ddd",
+  "track": "essentiel",
+  "section": "Domain Driven Design",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Modèle anémique : c'est quoi, pourquoi c'est un problème ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q32---modèle-anémique--cest-quoi-pourquoi-cest-un-problème-",
+  "explanation": "**À dire** : des entités avec seulement des getters/setters, et toute la logique dans des \"services\". Les\ninvariants sont dispersés, n'importe qui peut mettre l'objet dans un état invalide (`case.Status =\nApproved` sans contrôle). Modèle riche : méthodes métier qui protègent les invariants\n(`kycCase.Approve(reviewer)` qui lève une erreur si le screening manque), setters privés.\n\n**Nuance** : le modèle anémique est acceptable pour du CRUD sans règles."
+ },
+ {
+  "id": "essentiel-q33",
+  "theme": "ddd",
+  "track": "essentiel",
+  "section": "Domain Driven Design",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment introduirais-tu le DDD dans un existant (refactoring DDD) ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q33---comment-introduirais-tu-le-ddd-dans-un-existant-refactoring-ddd-",
+  "explanation": "**À dire** : pas de big bang. 1) **Event storming** avec le métier pour cartographier le domaine et faire\némerger le langage ; 2) identifier le **core domain** et les contextes ; 3) poser des tests de\ncaractérisation ; 4) introduire des **Value Objects** (gain rapide, peu risqué) ; 5) déplacer la logique\ndes services vers les entités (modèle riche) ; 6) isoler l'existant derrière une **ACL** et extraire un\ncontexte à la fois (strangler fig).\n\n---"
+ },
+ {
+  "id": "essentiel-q34",
+  "theme": "archi",
+  "track": "essentiel",
+  "section": "Architecture",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Clean Architecture vs hexagonale : quelle règle centrale ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q34---clean-architecture-vs-hexagonale--quelle-règle-centrale-",
+  "explanation": "**À dire** : même idée : le **domaine au centre**, indépendant des frameworks, de la base, du bus. Règle de\ndépendance : les dépendances pointent **vers l'intérieur**. Hexagonale (ports & adapters) : le domaine\ndéfinit des **ports** (interfaces), l'infrastructure fournit les **adapters** (SQL, Service Bus, API\nexterne), côté entrant (API, consumer) et sortant. Clean Architecture : couches concentriques (Domain,\nApplication/use cases, Infrastructure, Presentation). Bénéfice : domaine testable sans infrastructure,\ninfrastructure remplaçable (migration cloud !).\n\n**Piège** : multiplier projets et couches pour un service simple ; mapper 4 fois le même objet sans valeur."
+ },
+ {
+  "id": "essentiel-q35",
+  "theme": "archi",
+  "track": "essentiel",
+  "section": "Architecture",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "CQRS : quand ? Est-ce lié à l'Event Sourcing ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q35---cqrs--quand--est-ce-lié-à-levent-sourcing-",
+  "explanation": "**À dire** : séparer le modèle d'**écriture** (commandes, règles, invariants) du modèle de **lecture**\n(requêtes, projections optimisées pour l'affichage). Utile quand lecture et écriture ont des besoins très\ndifférents (charge, forme des données). **Indépendant** de l'Event Sourcing : on peut faire du CQRS avec une\nseule base (deux modèles de code), ou deux bases synchronisées. L'ES, lui, pousse presque toujours vers le\nCQRS (on ne requête pas un flux d'événements).\n\n**Si on creuse** : coût = cohérence éventuelle côté lecture, plus de code. MediatR est souvent utilisé pour\ndispatcher commandes/requêtes ; il est passé sous **licence commerciale** en 2025 : on peut s'en passer\n(simples handlers injectés)."
+ },
+ {
+  "id": "essentiel-q36",
+  "theme": "archi",
+  "track": "essentiel",
+  "section": "Architecture",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Monolithe, monolithe modulaire, microservices : comment choisir ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q36---monolithe-monolithe-modulaire-microservices--comment-choisir-",
+  "explanation": "**À dire** : microservices = déploiement indépendant, autonomie d'équipe, scalabilité ciblée ; coût =\ncomplexité distribuée (réseau, cohérence, observabilité, ops). Un **monolithe modulaire** bien découpé en\nbounded contexts est souvent le meilleur point de départ ; on extrait un service quand un besoin réel\n(cadence de déploiement, charge, équipe) le justifie.\n\n**Piège** : le **monolithe distribué** : des services qui doivent être déployés ensemble ou partagent une base.\n\n---"
+ },
+ {
+  "id": "essentiel-q37",
+  "theme": "microservices",
+  "track": "essentiel",
+  "section": "Microservices et patterns distribués",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Communication synchrone ou asynchrone entre services ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q37---communication-synchrone-ou-asynchrone-entre-services-",
+  "explanation": "**À dire** : **synchrone** (HTTP/gRPC) quand l'appelant a besoin de la réponse tout de suite (lecture,\nvalidation) ; couplage temporel : si l'appelé tombe, l'appelant souffre (→ timeouts, circuit breaker).\n**Asynchrone** (Service Bus, événements) pour les traitements longs, la propagation de faits, le\ndécouplage et l'absorption des pics. Un onboarding KYC, avec des fournisseurs externes lents, est\nnaturellement asynchrone."
+ },
+ {
+  "id": "essentiel-q38",
+  "theme": "microservices",
+  "track": "essentiel",
+  "section": "Microservices et patterns distribués",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment gérer une transaction qui traverse plusieurs microservices ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q38---comment-gérer-une-transaction-qui-traverse-plusieurs-microservices-",
+  "explanation": "**À dire** : pas de transaction distribuée (2PC) en pratique. On utilise une **saga** : une suite de\ntransactions locales, chacune publiant un événement ; en cas d'échec, des **actions compensatoires**\n(annuler, marquer, notifier). **Chorégraphie** : chaque service réagit aux événements (simple, mais flux\ndifficile à suivre) ; **orchestration** : un orchestrateur pilote les étapes (flux explicite, état\ncentralisé ; ex. Durable Functions, ou machine à états du dossier).\n\n**Si on creuse** : chaque étape doit être **idempotente** ; la compensation n'est pas un rollback (on ne\n\"désenvoie\" pas un e-mail) ; timeouts et états intermédiaires visibles."
+ },
+ {
+  "id": "essentiel-q39",
+  "theme": "microservices",
+  "track": "essentiel",
+  "section": "Microservices et patterns distribués",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "C'est quoi le pattern Outbox ? Pourquoi ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q39---cest-quoi-le-pattern-outbox--pourquoi-",
+  "explanation": "**À dire** : problème du **dual write** : sauvegarder en base **et** publier un message ne sont pas\natomiques ; si le service tombe entre les deux, l'état et les événements divergent. Outbox : dans la\n**même transaction** que la donnée métier, on écrit l'événement dans une table `Outbox` ; un process\nséparé (ou le change feed Cosmos) publie ensuite sur le bus et marque comme envoyé. Garantit\n**at-least-once** → le consommateur doit être idempotent (pattern **Inbox** : table des messages déjà traités)."
+ },
+ {
+  "id": "essentiel-q40",
+  "theme": "microservices",
+  "track": "essentiel",
+  "section": "Microservices et patterns distribués",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Idempotence : pourquoi, comment ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q40---idempotence--pourquoi-comment-",
+  "explanation": "**À dire** : avec un bus, la livraison est **au moins une fois** : un message peut arriver deux fois (retry,\ncrash avant `Complete`). Le \"exactly once\" de bout en bout n'existe pas, on fait **exactly-once processing**\npar idempotence : identifiant de message/de commande stocké et vérifié (contrainte unique), opérations\nnaturellement idempotentes (`SetStatus` plutôt que `Increment`), concurrence optimiste sur la version.\nCôté API : `Idempotency-Key`.\n\n---"
+ },
+ {
+  "id": "essentiel-q41",
+  "theme": "event-sourcing",
+  "track": "essentiel",
+  "section": "Event Sourcing",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "C'est quoi l'Event Sourcing ? Avantages, inconvénients ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q41---cest-quoi-levent-sourcing--avantages-inconvénients-",
+  "explanation": "**À dire** : on ne stocke pas l'état courant mais la **suite des événements** qui l'ont produit\n(`KycCaseOpened`, `DocumentSubmitted`, `IdentityVerified`, `CaseApproved`), en **append-only**. L'état se\nreconstruit en rejouant les événements (fold). **Avantages** : **audit trail complet et natif** (précieux\nen banque et pour le régulateur), historique et \"voyage dans le temps\", projections multiples créées\naprès coup, intégration naturelle avec l'événementiel. **Inconvénients** : complexité, versioning des\névénements, cohérence éventuelle des lectures, courbe d'apprentissage, RGPD, requêtes impossibles sans\nprojections.\n\n**Si on creuse** : ES ≠ architecture événementielle (on peut publier des événements sans faire d'ES) ;\nl'ES se justifie sur un **agrégat core** avec forte valeur d'historique, pas sur tout le système."
+ },
+ {
+  "id": "essentiel-q42",
+  "theme": "event-sourcing",
+  "track": "essentiel",
+  "section": "Event Sourcing",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Projections, read models : comment ça marche ? Comment les reconstruire ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q42---projections-read-models--comment-ça-marche--comment-les-reconstruire-",
+  "explanation": "**À dire** : une **projection** consomme le flux d'événements et maintient un modèle de lecture (table SQL,\ndocument Cosmos, index de recherche). Elle est **jetable** : on peut la supprimer et la reconstruire en\nrejouant tous les événements (nouveau besoin, bug corrigé). Elle doit être idempotente et suivre sa\nposition (checkpoint). La lecture est **éventuellement cohérente** : l'UI doit le gérer (retour de la\ncommande avec la version, polling, read-your-writes)."
+ },
+ {
+  "id": "essentiel-q43",
+  "theme": "event-sourcing",
+  "track": "essentiel",
+  "section": "Event Sourcing",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Concurrence, snapshots, versioning des événements ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q43---concurrence-snapshots-versioning-des-événements-",
+  "explanation": "**À dire** : **concurrence optimiste** : on écrit avec la **version attendue** du flux ; si quelqu'un a écrit\nentre-temps, conflit → recharger et rejouer la commande. **Snapshots** : pour les flux longs, on stocke\npériodiquement l'état pour ne rejouer que la fin (optimisation, à n'ajouter que si mesuré). **Versioning** :\nles événements sont immuables et éternels ; ajouter des champs optionnels (compatible), sinon nouvelle\nversion d'événement + **upcasting** à la lecture. Ne jamais modifier un événement stocké."
+ },
+ {
+  "id": "essentiel-q44",
+  "theme": "event-sourcing",
+  "track": "essentiel",
+  "section": "Event Sourcing",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Event Sourcing et RGPD : comment supprimer des données dans un log immuable ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q44---event-sourcing-et-rgpd--comment-supprimer-des-données-dans-un-log-immuable-",
+  "explanation": "**À dire** : **crypto-shredding** : les données personnelles des événements sont chiffrées avec une clé\npar personne (stockée dans un coffre, ex. Key Vault ou table de clés) ; pour \"effacer\", on détruit la clé :\nles données deviennent illisibles. Autre option : ne mettre dans les événements que des références, les\ndonnées personnelles étant dans un stockage à part, effaçable. **Nuance banque** : le droit à\nl'effacement est limité par les **obligations LCB-FT** de conservation (5 ans après la fin de la relation\nd'affaires) : on purge à l'issue de la durée légale, pas à la demande."
+ },
+ {
+  "id": "essentiel-q45",
+  "theme": "event-sourcing",
+  "track": "essentiel",
+  "section": "Event Sourcing",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Quel event store en .NET / Azure ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q45---quel-event-store-en-net--azure-",
+  "explanation": "**À dire** : **EventStoreDB** (renommé **KurrentDB**), **Marten** (sur PostgreSQL, très utilisé en .NET),\nou une implémentation sur **Cosmos DB** : un document par événement, partition key = id du flux, batch\ntransactionnel dans une partition pour l'append, **change feed** pour alimenter les projections. Ou une\ntable SQL append-only avec contrainte unique `(StreamId, Version)`.\n\n---"
+ },
+ {
+  "id": "essentiel-q46",
+  "theme": "messaging",
+  "track": "essentiel",
+  "section": "Messaging Azure",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Service Bus vs Event Grid vs Event Hubs ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q46---service-bus-vs-event-grid-vs-event-hubs-",
+  "explanation": "**À dire** :\n- **Service Bus** : **messages métier** à forte valeur (commandes, événements d'intégration) : queues et\n  topics/subscriptions, transactions, sessions (ordre), dead-letter, duplicate detection. Le choix pour un\n  flux KYC.\n- **Event Grid** : **notification d'événements** réactive, push, routage par filtres (ex. \"un blob a été\n  déposé\" → déclencher l'analyse d'un document). Faible latence, pas de file durable longue.\n- **Event Hubs** : **streaming** à haut débit (télémétrie, logs, IoT, millions d'événements/s), partitions,\n  rétention, relecture par offset, compatible Kafka.\n\n**Phrase clé** : *message = intention / donnée dont l'émetteur attend le traitement ; event = notification\nd'un fait ; stream = flux continu.*"
+ },
+ {
+  "id": "essentiel-q47",
+  "theme": "messaging",
+  "track": "essentiel",
+  "section": "Messaging Azure",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment un message Service Bus est-il consommé ? Que se passe-t-il en cas d'échec ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q47---comment-un-message-service-bus-est-il-consommé--que-se-passe-t-il-en-cas-déchec-",
+  "explanation": "**À dire** : mode **peek-lock** (par défaut) : le message est verrouillé pendant la *lock duration* ; le\nconsommateur fait `Complete` (supprimé), `Abandon` (redisponible, compteur de livraison +1),\n`DeadLetter` (mis de côté explicitement) ou `Defer`. Après **MaxDeliveryCount** (10 par défaut) échecs, le\nmessage part en **dead-letter queue (DLQ)** : il faut la **surveiller** (alerte) et avoir une procédure de\nretraitement. Mode **receive-and-delete** : rapide mais perte possible.\n\n**Si on creuse** : traitement plus long que le lock → renouvellement automatique du lock (le SDK le fait\navec `MaxAutoLockRenewalDuration`) ; erreur **non transitoire** (message invalide) → DLQ directe plutôt que\n10 retries ; erreur transitoire → retry, éventuellement replanification avec délai (`ScheduledEnqueueTime`)."
+ },
+ {
+  "id": "essentiel-q48",
+  "theme": "messaging",
+  "track": "essentiel",
+  "section": "Messaging Azure",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment garantir l'ordre des messages ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q48---comment-garantir-lordre-des-messages-",
+  "explanation": "**À dire** : par défaut pas de garantie d'ordre stricte. **Sessions** Service Bus : tous les messages avec\nle même `SessionId` (ex. id du client / du dossier) sont traités dans l'ordre, par un seul consommateur à\nla fois : ordre **par entité** tout en gardant du parallélisme entre entités. Alternative : rendre le\ntraitement tolérant au désordre (numéro de version, ignorer un événement plus ancien que l'état)."
+ },
+ {
+  "id": "essentiel-q49",
+  "theme": "messaging",
+  "track": "essentiel",
+  "section": "Messaging Azure",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Queue ou topic ? Duplicate detection ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q49---queue-ou-topic--duplicate-detection-",
+  "explanation": "**À dire** : **queue** = point à point, un message traité par un consommateur (competing consumers pour\nscaler). **Topic** = publish/subscribe : chaque **subscription** reçoit sa copie, avec filtres (SQL ou\ncorrelation). **Duplicate detection** : Service Bus ignore un message dont le `MessageId` a déjà été vu\ndans une fenêtre de temps : protège contre les doublons **à l'envoi**, pas contre la double livraison\nau consommateur → l'idempotence côté consommateur reste nécessaire."
+ },
+ {
+  "id": "essentiel-q50",
+  "theme": "messaging",
+  "track": "essentiel",
+  "section": "Messaging Azure",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Standard ou Premium ? Comment sécuriser Service Bus ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q50---standard-ou-premium--comment-sécuriser-service-bus-",
+  "explanation": "**À dire** : Premium = ressources dédiées, performances prévisibles, messages jusqu'à 100 Mo, intégration\nréseau privée (VNet, private endpoints), géo-réplication **(détails à vérifier)** : le choix probable en\nbanque. Sécurité : **Managed Identity + RBAC** (rôles *Azure Service Bus Data Sender/Receiver*) plutôt que\nchaînes de connexion SAS, private endpoints, chiffrement (clés gérées par le client si exigé).\n\n---"
+ },
+ {
+  "id": "essentiel-q51",
+  "theme": "azure",
+  "track": "essentiel",
+  "section": "Azure et migration cloud",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment migrer une application vers Azure ? Quelles stratégies ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q51---comment-migrer-une-application-vers-azure--quelles-stratégies-",
+  "explanation": "**À dire** : partir d'un **inventaire** (dépendances, données, flux, contraintes de sécurité et de\nconformité), puis choisir **par application** : **Rehost** (lift & shift sur VM : rapide, peu de gains),\n**Replatform** (ex. App Service, Azure SQL, peu de modifications), **Refactor / Rearchitect** (PaaS natif,\nFunctions, Service Bus, conteneurs), **Rebuild**, **Replace** (SaaS), ou **Retire / Retain**. Migration\n**incrémentale**, environnements, tests de non-régression, plan de bascule et de **retour arrière**,\nobservabilité avant la bascule.\n\n**Bloquants classiques d'une app .NET Framework** : état en session en mémoire, écriture sur le disque\nlocal, authentification Windows intégrée, dépendances COM/GAC, tâches planifiées Windows, configuration\ndans `web.config` avec secrets, appels à des ressources on-premise (→ connectivité hybride).\n\n**Banque** : réversibilité et plan de sortie (DORA), localisation des données, validation sécurité/RSSI."
+ },
+ {
+  "id": "essentiel-q52",
+  "theme": "azure",
+  "track": "essentiel",
+  "section": "Azure et migration cloud",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "IaaS, PaaS, FaaS : différences ? Quand choisir quoi ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q52---iaas-paas-faas--différences--quand-choisir-quoi-",
+  "explanation": "**À dire** : **IaaS** (VM) : contrôle total, tu gères l'OS et les patchs ; pour du legacy non portable.\n**PaaS** (App Service, Azure SQL, Container Apps) : tu gères l'application, Azure gère la plateforme : le\ndéfaut raisonnable. **FaaS** (Azure Functions) : code événementiel, facturation à l'exécution, scale\nautomatique ; idéal pour des traitements déclenchés par événements (message, blob, timer) ; limites :\ncold start, durée d'exécution, état. **Conteneurs** : Container Apps (serverless, KEDA, Dapr) avant AKS si\non n'a pas besoin de toute la puissance de Kubernetes."
+ },
+ {
+  "id": "essentiel-q53",
+  "theme": "azure",
+  "track": "essentiel",
+  "section": "Azure et migration cloud",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Azure Functions : modèles, plans, pièges ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q53---azure-functions--modèles-plans-pièges-",
+  "explanation": "**À dire** : triggers (HTTP, Service Bus, Timer, Blob, Event Grid, Cosmos DB change feed) et bindings.\nModèle **isolated worker** (process séparé, versions .NET récentes, middleware, DI standard) :\nl'**in-process** arrive en **fin de support le 10 novembre 2026** **(à vérifier)** → sujet de migration\nd'actualité. Plans : Consumption, **Flex Consumption** (réseau privé, instances toujours prêtes),\nPremium (pas de cold start, VNet), Dedicated (App Service). **Durable Functions** pour orchestrer\n(saga, attente d'événement externe, timeouts).\n\n**Pièges** : cold start, timeout, idempotence du trigger Service Bus, `HttpClient` statique / factory."
+ },
+ {
+  "id": "essentiel-q54",
+  "theme": "azure",
+  "track": "essentiel",
+  "section": "Azure et migration cloud",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment gères-tu les secrets et l'identité dans Azure ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q54---comment-gères-tu-les-secrets-et-lidentité-dans-azure-",
+  "explanation": "**À dire** : **aucun secret dans le code ni dans le repo**. **Managed Identity** pour que les services\ns'authentifient auprès des ressources Azure (SQL, Service Bus, Key Vault, Storage) **sans secret**, avec\nRBAC au moindre privilège. Les secrets restants (clés de fournisseurs externes) dans **Key Vault**,\nréférencés depuis la config (`DefaultAzureCredential`, références Key Vault d'App Service), avec rotation.\nEn CI/CD : **workload identity federation** (OIDC) plutôt que des secrets de service principal."
+ },
+ {
+  "id": "essentiel-q55",
+  "theme": "azure",
+  "track": "essentiel",
+  "section": "Azure et migration cloud",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Réseau et sécurité d'une application PaaS bancaire ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q55---réseau-et-sécurité-dune-application-paas-bancaire-",
+  "explanation": "**À dire** : **private endpoints** pour que les services PaaS (SQL, Storage, Service Bus, Key Vault)\nne soient pas exposés sur Internet ; intégration VNet des apps ; exposition publique via **Application\nGateway + WAF** ou **Front Door**, ou **API Management** comme façade des API (auth, quotas, versioning) ;\nNSG ; chiffrement en transit (TLS 1.2+) et au repos. Principe : **zero trust**, défense en profondeur.\n\n---"
+ },
+ {
+  "id": "essentiel-q56",
+  "theme": "data",
+  "track": "essentiel",
+  "section": "Données : SQL, EF Core, Cosmos DB",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "SQL ou NoSQL (Cosmos DB) : comment choisir ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q56---sql-ou-nosql-cosmos-db--comment-choisir-",
+  "explanation": "**À dire** : **SQL** : relations, transactions ACID multi-tables, requêtes ad hoc, reporting. **Cosmos DB** :\nscalabilité horizontale, latence faible, schéma flexible, distribution mondiale, accès par clé connue.\nChoisir selon les **patterns d'accès**, pas par mode. En DDD : un agrégat = un document est un bon\nalignement avec Cosmos."
+ },
+ {
+  "id": "essentiel-q57",
+  "theme": "data",
+  "track": "essentiel",
+  "section": "Données : SQL, EF Core, Cosmos DB",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Cosmos DB : partition key, RU, niveaux de cohérence ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q57---cosmos-db--partition-key-ru-niveaux-de-cohérence-",
+  "explanation": "**À dire** : la **partition key** est la décision la plus importante : forte cardinalité, répartition\nuniforme des écritures et du stockage, et requêtes les plus fréquentes **dans une seule partition**\n(ex. `customerId`). Une partition logique est limitée à 20 Go. Coût en **Request Units** (RU/s, provisionné\nou serverless) ; les requêtes cross-partition coûtent cher. **5 niveaux de cohérence** : Strong, Bounded\nStaleness, **Session** (par défaut : read-your-writes pour un client), Consistent Prefix, Eventual.\n**Change feed** : flux ordonné (par partition) des modifications → projections, outbox, intégration.\nTransactions : seulement dans une partition logique (batch transactionnel, procédures stockées).\n\n**Piège** : une partition key \"chaude\" (date du jour, statut) → throttling (429)."
+ },
+ {
+  "id": "essentiel-q58",
+  "theme": "data",
+  "track": "essentiel",
+  "section": "Données : SQL, EF Core, Cosmos DB",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "EF Core : problèmes de performance classiques ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q58---ef-core--problèmes-de-performance-classiques-",
+  "explanation": "**À dire** : **N+1** (lazy loading dans une boucle → `Include` ou projection), charger des entités entières\nau lieu de **projeter** (`Select` vers un DTO), oublier `AsNoTracking` en lecture, requêtes non traduites\névaluées en mémoire, absence d'index, `SaveChanges` dans une boucle. Diagnostic : logger le SQL généré,\nplan d'exécution. Concurrence : **concurrence optimiste** avec `rowversion` → `DbUpdateConcurrencyException`."
+ },
+ {
+  "id": "essentiel-q59",
+  "theme": "data",
+  "track": "essentiel",
+  "section": "Données : SQL, EF Core, Cosmos DB",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment optimises-tu une requête SQL lente ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q59---comment-optimises-tu-une-requête-sql-lente-",
+  "explanation": "**À dire** : mesurer d'abord (temps, lectures logiques), lire le **plan d'exécution** (scan vs seek, key\nlookups, estimations fausses), vérifier les **index** (couvrants, ordre des colonnes, sélectivité), requêtes\nnon *sargable* (fonction sur la colonne filtrée), statistiques, parameter sniffing, réduire les colonnes et\nlignes ramenées, pagination par clé plutôt que `OFFSET` sur de gros volumes. Puis re-mesurer.\n\n---"
+ },
+ {
+  "id": "essentiel-q60",
+  "theme": "devops",
+  "track": "essentiel",
+  "section": "DevOps, CI/CD, Docker",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Décris une pipeline CI/CD que tu mettrais en place",
+  "ref": "01-fiches/00-essentiel-poste.md#q60---décris-une-pipeline-cicd-que-tu-mettrais-en-place",
+  "explanation": "**À dire** : pipeline **YAML versionnée** (Azure DevOps). **CI** à chaque PR : restore, build, tests\nunitaires et d'intégration, couverture, analyse statique (Sonar), **scan des dépendances** et des secrets,\nbuild de l'image Docker, scan de l'image ; la PR ne merge que si tout est vert + revue. **CD** : artefact\n**construit une fois**, promu d'environnement en environnement (dev → recette → préprod → prod),\ndéploiement de l'infra en **IaC** (Bicep/Terraform), **approbations** et gates sur les environnements\nsensibles, tests de fumée après déploiement, stratégie de déploiement sans interruption (slots\nApp Service, blue/green, canary), **rollback** rapide.\n\n**Lien poste** : \"you build it, you ship it\" = l'équipe possède sa pipeline."
+ },
+ {
+  "id": "essentiel-q61",
+  "theme": "devops",
+  "track": "essentiel",
+  "section": "DevOps, CI/CD, Docker",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Stratégie de branches ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q61---stratégie-de-branches-",
+  "explanation": "**À dire** : **trunk-based** avec branches courtes et PR, intégration fréquente, **feature flags** pour\nlivrer du code inactif ; GitFlow est plus lourd (branches longues, merges douloureux), justifié seulement\navec plusieurs versions maintenues en parallèle. Commits petits et atomiques, messages clairs."
+ },
+ {
+  "id": "essentiel-q62",
+  "theme": "devops",
+  "track": "essentiel",
+  "section": "DevOps, CI/CD, Docker",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Docker : bonnes pratiques pour une image .NET ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q62---docker--bonnes-pratiques-pour-une-image-net-",
+  "explanation": "**À dire** : **multi-stage build** (SDK pour compiler, image runtime `aspnet` ou *chiseled* minimale pour\nexécuter), utilisateur **non-root**, pas de secret dans l'image, tags immuables (pas `latest` en prod),\n`.dockerignore`, health checks, scan de vulnérabilités. .NET sait aussi produire une image sans Dockerfile\n(`dotnet publish /t:PublishContainer`).\n\n---"
+ },
+ {
+  "id": "essentiel-q63",
+  "theme": "devsecops",
+  "track": "essentiel",
+  "section": "DevSecOps et sécurité",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Qu'est-ce que le DevSecOps pour toi ? Quelles failles surveilles-tu ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q63---quest-ce-que-le-devsecops-pour-toi--quelles-failles-surveilles-tu-",
+  "explanation": "**À dire** : la sécurité **intégrée tout au long du cycle** et portée par l'équipe, pas un audit en fin de\nprojet (**shift left**) : threat modeling à la conception, revue de code, **SAST**, **SCA** (dépendances\nvulnérables, SBOM), **scan de secrets**, scan d'images, **DAST** en recette, durcissement de l'infra en IaC,\nmonitoring de sécurité en prod. Failles : **OWASP Top 10** et surtout **OWASP API Security Top 10**, dont\nla n°1 : **BOLA** (Broken Object Level Authorization : accéder à l'objet d'un autre en changeant un id),\ninjection, authentification cassée, exposition excessive de données, absence de rate limiting, SSRF.\n\n**Si on creuse** : supply chain : verrouiller les versions (lock files, Central Package Management), sources\nNuGet maîtrisées, Dependabot/Renovate, signature des artefacts."
+ },
+ {
+  "id": "essentiel-q64",
+  "theme": "devsecops",
+  "track": "essentiel",
+  "section": "DevSecOps et sécurité",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment protèges-tu les données personnelles dans une squad KYC ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q64---comment-protèges-tu-les-données-personnelles-dans-une-squad-kyc-",
+  "explanation": "**À dire** : **minimisation** (ne collecter et ne propager que le nécessaire), **pas de données personnelles\ndans les logs** (masquage, identifiants techniques), chiffrement en transit et au repos (clés gérées si\nexigé), accès au **moindre privilège** et tracé, documents d'identité dans un stockage dédié avec accès\nlimité dans le temps (SAS courts, ou proxy), durées de conservation appliquées (purge), environnements\nhors prod **sans données réelles** (anonymisation/données synthétiques).\n\n---"
+ },
+ {
+  "id": "essentiel-q65",
+  "theme": "observabilite",
+  "track": "essentiel",
+  "section": "Observabilité et run",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Logs, métriques, traces : comment instrumentes-tu un service ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q65---logs-métriques-traces--comment-instrumentes-tu-un-service-",
+  "explanation": "**À dire** : les **3 piliers** : **logs structurés** (JSON, `ILogger` avec templates, niveaux maîtrisés),\n**métriques** (débit, erreurs, latence, taille des files, messages en DLQ), **traces distribuées** qui\nsuivent une requête à travers API, bus et services (propagation du contexte W3C `traceparent`, y compris\ndans les messages Service Bus). Standard : **OpenTelemetry** (le SDK .NET l'intègre via `ActivitySource` et\n`Meter`) ; Datadog sait ingérer de l'OTel ou passer par son traceur `dd-trace-dotnet`. Corrélation\nlogs ↔ traces par `trace_id`."
+ },
+ {
+  "id": "essentiel-q66",
+  "theme": "observabilite",
+  "track": "essentiel",
+  "section": "Observabilité et run",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Datadog : qu'en connais-tu ? Comment l'utiliserais-tu ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q66---datadog--quen-connais-tu--comment-lutiliserais-tu-",
+  "explanation": "**À dire** (même sans pratique intensive) : plateforme d'observabilité SaaS : **APM** (traces, service map,\nflame graphs), **logs** (pipelines de parsing, index, *log rehydration*), **métriques** et dashboards,\n**monitors** (seuils, anomalies) branchés sur l'astreinte, **SLO** suivis dans l'outil, intégrations Azure\n(métriques des ressources : Service Bus, App Service, Functions). Pour un service : tags unifiés\n`service`/`env`/`version` pour corréler, monitors sur les SLI (taux d'erreur, latence p95/p99, âge du\nplus vieux message, DLQ non vide).\n\n**Piège** : prétendre une maîtrise que tu n'as pas. Transposer honnêtement depuis tes outils (Grafana,\nLog Analytics / Application Insights) : *\"les concepts sont les mêmes, l'outil se prend en main vite\"*."
+ },
+ {
+  "id": "essentiel-q67",
+  "theme": "observabilite",
+  "track": "essentiel",
+  "section": "Observabilité et run",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "SLI, SLO, error budget ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q67---sli-slo-error-budget-",
+  "explanation": "**À dire** : **SLI** = mesure de la qualité vue par l'utilisateur (ex. % de demandes d'onboarding traitées\nsans erreur, latence p95 de l'API). **SLO** = objectif sur ce SLI (99,9 % sur 30 jours). **Error budget** =\nla marge d'échec permise (0,1 %) : tant qu'il reste du budget, on livre ; s'il est consommé, on priorise la\nfiabilité. Alerter sur la **consommation du budget** (burn rate) plutôt que sur chaque erreur."
+ },
+ {
+  "id": "essentiel-q68",
+  "theme": "observabilite",
+  "track": "essentiel",
+  "section": "Observabilité et run",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "\"You build it, you ship it, you run it\" : qu'est-ce que ça implique pour toi ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q68---you-build-it-you-ship-it-you-run-it--quest-ce-que-ça-implique-pour-toi-",
+  "explanation": "**À dire** : l'équipe est responsable de son service **jusqu'en production** : elle le conçoit, le livre\n(pipeline à elle) et l'exploite (monitoring, alertes, astreinte, incidents). Conséquences concrètes : on\npense **exploitabilité dès la conception** (logs, métriques, health checks, feature flags, procédures de\nrejeu de DLQ), on reçoit les alertes de son propre code, **post-mortems sans recherche de coupable** avec\nactions suivies. Bénéfice : boucle de feedback courte, qualité qui monte."
+ },
+ {
+  "id": "essentiel-q69",
+  "theme": "observabilite",
+  "track": "essentiel",
+  "section": "Observabilité et run",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Un incident en production : comment réagis-tu ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q69---un-incident-en-production--comment-réagis-tu-",
+  "explanation": "**À dire** : 1) **qualifier l'impact** (qui, combien, depuis quand) et communiquer ; 2) **rétablir le\nservice d'abord** (rollback, feature flag, scale, bascule), la cause racine ensuite ; 3) diagnostiquer avec\nles traces/logs/métriques et la corrélation avec le dernier déploiement ; 4) une fois stabilisé :\n**post-mortem** (chronologie, cause, pourquoi ça n'a pas été détecté avant, actions). En banque : obligations\nde **déclaration des incidents majeurs** (DORA) → savoir que ce processus existe et le suivre.\n\n---"
+ },
+ {
+  "id": "essentiel-q70",
+  "theme": "banque",
+  "track": "essentiel",
+  "section": "Domaine bancaire et réglementaire",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Explique le KYC et la LCB-FT en 1 minute",
+  "ref": "01-fiches/00-essentiel-poste.md#q70---explique-le-kyc-et-la-lcb-ft-en-1-minute",
+  "explanation": "**À dire** : **LCB-FT** = lutte contre le blanchiment et le financement du terrorisme, obligation légale\ndes établissements financiers (Code monétaire et financier, directives européennes, supervision ACPR).\nLe **KYC** en est le socle : **identifier** le client, **vérifier** son identité (pièce d'identité, selfie,\nidentité numérique), le **filtrer** contre les listes de **sanctions / gel des avoirs** et de **PPE**,\ncomprendre l'objet de la relation, puis **évaluer son risque** pour appliquer une **vigilance** simplifiée,\nstandard ou renforcée. Et c'est **continu** : mise à jour du dossier, revue périodique, surveillance des\nopérations, déclaration de soupçon à Tracfin (par la conformité). Pour une personne morale : **KYB**,\navec les **bénéficiaires effectifs**.\n\n**Contexte Xpollens** : en BaaS, les partenaires distribuent les comptes, mais l'établissement régulé reste\n**responsable** du KYC → service robuste, multi-partenaires, auditable **(à vérifier)**."
+ },
+ {
+  "id": "essentiel-q71",
+  "theme": "banque",
+  "track": "essentiel",
+  "section": "Domaine bancaire et réglementaire",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "DSP2 et SCA : c'est quoi ? Quel impact pour une squad User & KYC ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q71---dsp2-et-sca--cest-quoi--quel-impact-pour-une-squad-user--kyc-",
+  "explanation": "**À dire** : **DSP2** (directive européenne sur les services de paiement) : ouverture des comptes aux tiers\n(agrégation, initiation de paiement via API) et **authentification forte (SCA)** : au moins **2 facteurs de\ncatégories différentes** parmi **connaissance** (mot de passe, code), **possession** (téléphone enrôlé) et\n**inhérence** (biométrie). Requise pour l'accès au compte, les paiements électroniques, les actions\nsensibles. Pour les paiements : **dynamic linking** (l'authentification est liée au montant et au\nbénéficiaire). **Exemptions** : faibles montants, bénéficiaires de confiance, analyse de risque (TRA),\npaiements récurrents. **Impact squad** : l'**enrôlement** du moyen d'authentification se fait souvent\npendant l'onboarding, et la modification de données sensibles (téléphone, e-mail, IBAN de retrait) doit\npasser par une SCA → collaboration avec l'équipe SCA (contrats d'API, événements). La fiche de poste le\nmentionne : *\"collaborer avec les autres équipes qui intègrent le SCA\"*.\n\n**À savoir citer** : DSP3 / règlement PSR en cours d'adoption **(à vérifier)**."
+ },
+ {
+  "id": "essentiel-q72",
+  "theme": "banque",
+  "track": "essentiel",
+  "section": "Domaine bancaire et réglementaire",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment les contraintes réglementaires se traduisent-elles dans le code et l'architecture ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q72---comment-les-contraintes-réglementaires-se-traduisent-elles-dans-le-code-et-larchitecture-",
+  "explanation": "**À dire** :\n- **Traçabilité / audit** : qui a fait quoi, quand, pourquoi (décision de KYC, version des règles\n  appliquées) → journal d'audit immuable, event sourcing possible.\n- **Exactitude des règles** : règles métier explicites, testées (BDD avec la conformité), versionnées.\n- **Protection des données** : RGPD, minimisation, chiffrement, logs sans données personnelles.\n- **Conservation** : 5 ans après la fin de la relation (LCB-FT), puis purge.\n- **Résilience** : DORA (tests, plans de continuité, gestion des prestataires tiers critiques, incidents).\n- **Contrôle** : séparation des rôles, validation à 4 yeux pour certaines décisions, revue de code\n  obligatoire, traçabilité des déploiements."
+ },
+ {
+  "id": "essentiel-q73",
+  "theme": "banque",
+  "track": "essentiel",
+  "section": "Domaine bancaire et réglementaire",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "DORA, RGPD : l'essentiel ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q73---dora-rgpd--lessentiel-",
+  "explanation": "**À dire** : **DORA** (règlement UE, applicable depuis le **17 janvier 2025**) : résilience opérationnelle\nnumérique des acteurs financiers : gestion des risques TIC, **déclaration des incidents majeurs**, tests de\nrésilience, maîtrise des **prestataires tiers** (dont le cloud : contrats, plan de sortie, concentration).\n**RGPD** : base légale, minimisation, durée de conservation, droits des personnes (accès, rectification,\neffacement limité par les obligations légales), sécurité, privacy by design. Tension classique : RGPD\n(minimiser, effacer) vs LCB-FT (collecter, conserver) → l'obligation légale LCB-FT fonde la conservation.\n\n---"
+ },
+ {
+  "id": "essentiel-q74",
+  "theme": "agile",
+  "track": "essentiel",
+  "section": "Agile et collaboration",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Scrum, Kanban : comment travailles-tu en équipe agile ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q74---scrum-kanban--comment-travailles-tu-en-équipe-agile-",
+  "explanation": "**À dire** : Scrum = sprints, rôles (PO, SM, devs), cérémonies (planning, daily, review, rétro), backlog\naffiné. Kanban = flux continu, limites de WIP, mesure du lead time. L'important pour moi : des **user\nstories petites** avec critères d'acceptation clairs (BDD), une **Definition of Done** qui inclut tests,\nrevue, déploiement et monitoring, des **rétrospectives** qui produisent des actions réelles. En tant que\nsenior : participer activement à l'affinage (questions métier, découpage, risques techniques), pas\nseulement exécuter."
+ },
+ {
+  "id": "essentiel-q75",
+  "theme": "agile",
+  "track": "essentiel",
+  "section": "Agile et collaboration",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Comment collabores-tu avec d'autres équipes (ex. l'équipe SCA) ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q75---comment-collabores-tu-avec-dautres-équipes-ex-léquipe-sca-",
+  "explanation": "**À dire** : **contrat d'abord** : API documentées (OpenAPI), événements versionnés (published language),\ncompatibilité ascendante, dépréciation annoncée. **Tests de contrat** (consumer-driven, ex. Pact) pour\ndétecter une rupture avant la prod. Rituels de synchronisation légers, interlocuteurs identifiés,\ndépendances rendues visibles tôt dans le backlog. En DDD : clarifier la relation (customer/supplier,\nconformist, ACL)."
+ },
+ {
+  "id": "essentiel-q76",
+  "theme": "agile",
+  "track": "essentiel",
+  "section": "Agile et collaboration",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Tu n'es pas d'accord avec une décision technique du tech lead : que fais-tu ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q76---tu-nes-pas-daccord-avec-une-décision-technique-du-tech-lead--que-fais-tu-",
+  "explanation": "**À dire** : j'expose mon point de vue **avec des faits** (risques, coûts, alternatives, éventuellement un\npetit spike ou une mesure), j'écoute ses contraintes que je ne connais pas forcément, et une fois la\ndécision prise je l'applique pleinement (*disagree and commit*). Si c'est structurant : la tracer dans un\n**ADR** (Architecture Decision Record) pour pouvoir la réévaluer plus tard sur des faits.\n\n---"
+ },
+ {
+  "id": "essentiel-q77",
+  "theme": "algo",
+  "track": "essentiel",
+  "section": "Algorithmique et robustesse",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Complexité des collections .NET : List, Dictionary, HashSet ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q77---complexité-des-collections-net--list-dictionary-hashset-",
+  "explanation": "**À dire** : `List<T>` : accès par index O(1), recherche `Contains` O(n), ajout en fin O(1) amorti, insertion\nau milieu O(n). `Dictionary<TKey,TValue>` / `HashSet<T>` : recherche, ajout, suppression **O(1) en moyenne**\n(table de hachage), O(n) au pire si mauvais hash. `SortedDictionary` : O(log n). Réflexe : remplacer un\n`list.Contains` dans une boucle (O(n²)) par un `HashSet` (O(n)).\n\n**Si on creuse** : un objet utilisé comme clé doit avoir `Equals` et `GetHashCode` cohérents et **stables**\n(clé immuable) ; les records le font automatiquement."
+ },
+ {
+  "id": "essentiel-q78",
+  "theme": "algo",
+  "track": "essentiel",
+  "section": "Algorithmique et robustesse",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Qu'est-ce qu'un code \"robuste\" pour toi ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q78---quest-ce-quun-code-robuste-pour-toi-",
+  "explanation": "**À dire** : il **valide ses entrées** aux frontières (et rend les états invalides impossibles dans le\ndomaine : Value Objects), gère explicitement les cas limites (vide, null, doublons, bornes, fuseaux\nhoraires, arrondis), **échoue proprement** (erreurs claires, pas d'état à moitié écrit), est idempotent face\naux rejeux, tolère les pannes de ses dépendances (timeouts, retry, circuit breaker), est **observable** et\ncouvert par des tests sur ces cas limites.\n\n---"
+ },
+ {
+  "id": "essentiel-q79",
+  "theme": "ia",
+  "track": "essentiel",
+  "section": "IA pour le développement",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Utilises-tu des agents de code ? Comment, au quotidien ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q79---utilises-tu-des-agents-de-code--comment-au-quotidien-",
+  "explanation": "**À dire** (structure) : oui, tous les jours, **avec méthode** : contexte du projet dans un fichier versionné\n(`AGENTS.md` : commandes, conventions, architecture, interdits), **plan validé** avant modification,\n**tests comme filet** (idéalement écrits ou validés par moi d'abord), **petits diffs**, **revue humaine** de\ntout ce qui est mergé : je reste l'auteur responsable. Exemple concret vécu (voir document personnel de\npositionnement IA).\n\n**Message clé** : *l'IA amplifie l'ingénierie (tests, CI, petits incréments), elle ne la remplace pas.*"
+ },
+ {
+  "id": "essentiel-q80",
+  "theme": "ia",
+  "track": "essentiel",
+  "section": "IA pour le développement",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Quels risques de l'IA dans une banque ? À quelles conditions l'utiliser ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q80---quels-risques-de-lia-dans-une-banque--à-quelles-conditions-lutiliser-",
+  "explanation": "**À dire** : **données** (code et données envoyés à un fournisseur : outils approuvés, contrats, pas de\ndonnées client, options de non-rétention), **sécurité** (prompt injection indirecte via un fichier ou une\npage lue par l'agent, exécution de commandes, exfiltration ; hallucination de paquets → supply chain),\n**qualité** (code plausible mais faux, tests qui valident le bug), **conformité** (DORA : l'outil IA est un\nprestataire tiers ; AI Act). Conditions : outils validés par la sécurité, permissions minimales, sandbox,\nrevue obligatoire, CI inchangée en exigence, traçabilité."
+ },
+ {
+  "id": "essentiel-q81",
+  "theme": "ia",
+  "track": "essentiel",
+  "section": "IA pour le développement",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Qu'est-ce que tu ne délègues jamais à un agent ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q81---quest-ce-que-tu-ne-délègues-jamais-à-un-agent-",
+  "explanation": "**À dire** : la **décision** (architecture, arbitrages), la **compréhension** du code que je merge, la\nvalidation des règles métier et réglementaires, tout ce qui touche aux secrets et à la prod sans\ncontrôle. Je délègue l'exécution encadrée : boilerplate, tests à partir de cas que j'ai définis,\nexploration d'un code inconnu, migrations mécaniques, première relecture."
+ },
+ {
+  "id": "essentiel-q82",
+  "theme": "ia",
+  "track": "essentiel",
+  "section": "IA pour le développement",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "C'est quoi MCP ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q82---cest-quoi-mcp-",
+  "explanation": "**À dire** : **Model Context Protocol**, standard ouvert (Anthropic, adopté largement) pour connecter un\nagent/LLM à des **outils et sources de données** via des serveurs MCP (fichiers, base, tickets, API\ninterne). Avantage : une intégration réutilisable par tous les clients compatibles. Risques : un serveur\nMCP est du code tiers qui reçoit des données et peut agir → serveurs approuvés, permissions minimales,\nattention à la prompt injection dans les données renvoyées. SDK C# officiel disponible."
+ },
+ {
+  "id": "essentiel-q83",
+  "theme": "ia",
+  "track": "essentiel",
+  "section": "IA pour le développement",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "L'IA est interdite pendant le kata : qu'en penses-tu ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q83---lia-est-interdite-pendant-le-kata--quen-penses-tu-",
+  "explanation": "**À dire** : *\"C'est logique : vous voulez voir comment je raisonne, teste et refactore moi-même ; c'est\njustement ce qui me permet de juger ce que produit un agent.\"* Puis, si on te demande comment tu l'aurais\nfait avec un agent : golden master généré et relu, couverture et mutation vérifiées, refactoring en petits\npas, un commit par pas.\n\n---"
+ },
+ {
+  "id": "essentiel-q84",
+  "theme": "archi",
+  "track": "essentiel",
+  "section": "Mises en situation",
+  "prio": 3,
+  "top": true,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Conçois le service d'onboarding KYC (mise en situation)",
+  "ref": "01-fiches/00-essentiel-poste.md#q84---conçois-le-service-donboarding-kyc-mise-en-situation",
+  "explanation": "**Méthode** (à dire avant de dessiner) : *\"Je commence par clarifier le besoin et les contraintes, puis je\npropose un découpage, les flux, les données, et je finis par la résilience, la sécurité et l'observabilité.\"*\n1. **Questions** : volumes (dossiers/jour, pics de campagnes partenaires), personnes physiques et/ou\n   morales, fournisseurs de vérification/screening, délais attendus, multi-partenaires, existant.\n2. **Contextes** : Onboarding (orchestration, machine à états du `KycCase`), Vérification d'identité (ACL\n   vers le fournisseur), Screening, Risque, Profil client (Q31).\n3. **Flux** : `POST /onboarding-cases` (avec `Idempotency-Key`) → `202 Accepted` + id ; documents déposés\n   en Blob Storage (SAS court) → Event Grid → analyse ; étapes asynchrones via **Service Bus** ; orchestration\n   par machine à états (ou Durable Functions) avec timeouts et relances ; résultat publié\n   (`CustomerOnboarded` / `OnboardingRejected`) vers les autres équipes (dont SCA pour l'enrôlement).\n4. **Données** : `KycCase` en event sourcing (audit natif) ou état + journal d'audit ; projections pour les\n   back-offices conformité ; documents chiffrés, durée de conservation.\n5. **Fiabilité** : outbox, consommateurs idempotents, DLQ surveillées, retry/circuit breaker vers les\n   fournisseurs, reprise manuelle possible (revue par un analyste conformité).\n6. **Sécurité** : OAuth2 (partenaire = client credentials, utilisateur = auth code + PKCE), BOLA (cloisonnement\n   par partenaire/tenant), Managed Identity, private endpoints, pas de PII dans les logs.\n7. **Observabilité** : traces de bout en bout par dossier, métriques métier (taux d'acceptation, durée\n   moyenne, dossiers bloqués), SLO.\n\n**Piège** : dessiner des boîtes Azure pendant 10 minutes sans avoir posé de question ni parlé du métier."
+ },
+ {
+  "id": "essentiel-q85",
+  "theme": "archi",
+  "track": "essentiel",
+  "section": "Mises en situation",
+  "prio": 3,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "Un consommateur Service Bus traite parfois un message deux fois. Pourquoi ? Que fais-tu ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q85---un-consommateur-service-bus-traite-parfois-un-message-deux-fois-pourquoi--que-fais-tu-",
+  "explanation": "**À dire** : normal en **at-least-once** : lock expiré pendant un traitement long (le message réapparaît),\ncrash après traitement et avant `Complete`, retry de l'émetteur. Solutions : **idempotence** (table des\nmessages traités avec contrainte unique, dans la même transaction que l'effet métier = inbox), renouvellement\nde lock, traitement plus court ; duplicate detection côté envoi ; vérifier que l'effet métier est lui-même\nidempotent."
+ },
+ {
+  "id": "essentiel-q86",
+  "theme": "archi",
+  "track": "essentiel",
+  "section": "Mises en situation",
+  "prio": 2,
+  "top": false,
+  "level": 2,
+  "type": "open",
+  "block": true,
+  "question": "La latence de l'API a doublé depuis le dernier déploiement. Comment investigues-tu ?",
+  "ref": "01-fiches/00-essentiel-poste.md#q86---la-latence-de-lapi-a-doublé-depuis-le-dernier-déploiement-comment-investigues-tu-",
+  "explanation": "**À dire** : corréler avec le déploiement (version tag dans l'APM), comparer les traces avant/après pour\ntrouver le segment lent (base, appel externe, CPU), vérifier les métriques infra (CPU, mémoire, GC, pool\nde connexions, thread pool starvation dû à du sync-over-async), le SQL généré (nouvelle requête N+1,\nindex manquant). Rollback si l'impact est fort, puis analyse à froid. Ajouter un test/monitor pour que ça\nne se reproduise pas sans alerte.\n\n---"
+ }
+]);
 
   </script>
   <script>
